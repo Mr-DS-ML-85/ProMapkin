@@ -1,0 +1,11 @@
+{
+  "description": "Tasks over tests/fixtures/sample_repo.",
+  "tasks": [
+    {"query": "where are documents persisted", "expected": ["searchapp/storage/index_repository.py"]},
+    {"query": "make ranking pluggable with different scoring algorithms", "expected": ["searchapp/domain/ranking.py"]},
+    {"query": "call the remote embedding service", "expected": ["searchapp/adapters/embedding_client.py"]},
+    {"query": "paginate the results returned to http clients", "expected": ["searchapp/api/routes.py", "searchapp/services/search_service.py"]},
+    {"query": "environment variables for the database location", "expected": ["searchapp/config.py"]},
+    {"query": "limit how many documents are scored", "expected": ["searchapp/domain/ranking.py"]}
+  ]
+}

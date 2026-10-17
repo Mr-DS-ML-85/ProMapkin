@@ -1,0 +1,25 @@
+{
+  "description": "Hand-written natural-language tasks over the Promapkin repository itself. Queries avoid exact identifiers so they test semantic and graph retrieval, not name lookup.",
+  "tasks": [
+    {"query": "where are design patterns like strategy or adapter detected", "expected": ["promapkin/agents/specialists.py", "promapkin/ml/classify.py"]},
+    {"query": "how does the server refuse to read files outside the repository", "expected": ["promapkin/security.py"]},
+    {"query": "what happens when two agents update the same task record at once", "expected": ["promapkin/handoff.py"]},
+    {"query": "smoothing embeddings over neighbouring nodes in the graph", "expected": ["promapkin/ml/graph_ml.py"]},
+    {"query": "fit facts into a limited number of tokens without dropping constraints", "expected": ["promapkin/retrieval.py"]},
+    {"query": "ask the user before downloading a model", "expected": ["promapkin/ml/models.py"]},
+    {"query": "detect express style http routes in typescript", "expected": ["promapkin/extract/js_ext.py"]},
+    {"query": "mark agent conclusions as outdated after source files change", "expected": ["promapkin/scanner.py", "promapkin/maintenance.py"]},
+    {"query": "json rpc message loop over standard input", "expected": ["promapkin/mcp_server.py"]},
+    {"query": "parse architecture decision records status context consequences", "expected": ["promapkin/extract/docs_ext.py"]},
+    {"query": "find the most trustworthy path between two code elements", "expected": ["promapkin/graph.py"]},
+    {"query": "strongly connected components of module imports", "expected": ["promapkin/graph.py"]},
+    {"query": "log what is sent to a hosted language model", "expected": ["promapkin/agents/providers.py"]},
+    {"query": "score how risky a function is to change", "expected": ["promapkin/agents/specialists.py"]},
+    {"query": "probabilistic text classifier trained on seed examples", "expected": ["promapkin/ml/classify.py"]},
+    {"query": "draw the layered architecture as a mermaid flowchart", "expected": ["promapkin/blueprint.py"]},
+    {"query": "compare the same coding agent with and without context on identical tasks", "expected": ["promapkin/bench.py"]},
+    {"query": "link a call expression to the function it refers to via imports", "expected": ["promapkin/scanner.py"]},
+    {"query": "read npm and pypi dependency declarations", "expected": ["promapkin/extract/manifest_ext.py"]},
+    {"query": "nearest vectors by cosine similarity", "expected": ["promapkin/ml/embedders.py"]}
+  ]
+}
