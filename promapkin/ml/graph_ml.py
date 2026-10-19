@@ -131,12 +131,18 @@ def disambiguate(store: Store, ambiguous: list[dict[str, Any]], model: str | Non
     for amb in ambiguous:
         src, cands = amb["src"], amb["candidates"]
         choice, conf, evidence, method = None, 0.0, ev.HEURISTIC, ""
-        if vecs and src in vecs and all(c in vecs for c in cands):
+        if vecs and src in vecs and all(c in vecs for c in cands) and len(cands) >= 2:
             sims = sorted(((sum(a * b for a, b in zip(vecs[src], vecs[c])), c) for c in cands), reverse=True)
             margin = sims[0][0] - sims[1][0]
             if margin > 0.04:
                 choice, conf, evidence = sims[0][1], round(min(0.75, 0.4 + margin * 2), 3), ev.ML_CLASSIFIER
                 method = f"graph-embedding similarity (margin {margin:.3f})"
+        elif vecs and src in vecs and len(cands) == 1 and cands[0] in vecs:
+            # Single candidate — no margin to compute; take it if similarity is high enough.
+            sim = sum(a * b for a, b in zip(vecs[src], vecs[cands[0]]))
+            if sim > 0.4:
+                choice, conf, evidence = cands[0], round(min(0.75, 0.4 + sim), 3), ev.ML_CLASSIFIER
+                method = f"graph-embedding similarity (single candidate, sim {sim:.3f})"
         if choice is None:
             src_mod = "module:" + src.split(":")[1] if src.count(":") >= 2 else src
             imported = {e["dst"] for e in store.edges(src=src_mod, types=["imports"])}
