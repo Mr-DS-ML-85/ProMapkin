@@ -190,6 +190,22 @@ class GraphMLTest(RepoTestCase):
             graph_ml.disambiguate(s, amb, gm, None)
             graph_ml.disambiguate(s, amb, None, None)
 
+    def test_similar_accepts_free_text_as_positional_ref(self):
+        # Regression: free text given as the node ref raised NotFound (CLI exit 2) or was guessed into an
+        # arbitrary node via full-text search, which then came back as its own top hit.
+        from promapkin.service import Service
+        svc = Service(self.ws)
+        out = svc.similar("zzz qqq nothing")
+        self.assertEqual(out["query"], "zzz qqq nothing")
+        self.assertNotIn("graph:", out["method"])          # text vectors, not graph-propagated ones
+        out = svc.similar("rank search results")
+        self.assertEqual(out["query"], "rank search results")
+        self.assertTrue(out["results"])
+        node = svc.similar("SearchService")
+        self.assertEqual(node["query"], "symbol:searchapp.services.search_service:SearchService")
+        self.assertIn("graph:", node["method"])
+        self.assertNotIn(node["query"], [r["id"] for r in node["results"]])
+
     def test_layers_are_classified_during_scan(self):
         mod = self.ws.store.node("module:searchapp.storage.index_repository")
         self.assertEqual(mod["attrs"]["layer"]["label"], "persistence")

@@ -39,8 +39,10 @@ class Graph:
         self.store = store
 
     # ---------------------------------------------------------------- lookup
-    def resolve(self, ref: str) -> str:
-        """Accept an id, qualified name, short name, 'Class::method', 'api:search', or a file path."""
+    def resolve(self, ref: str, fuzzy: bool = True) -> str:
+        """Accept an id, qualified name, short name, 'Class::method', 'api:search', or a file path.
+
+        With fuzzy=False, free text is not guessed into a node through full-text search."""
         ref = ref.strip()
         if self.store.node(ref):
             return ref
@@ -61,7 +63,7 @@ class Graph:
                                            (f"%{frag}%",)).fetchall()
             hits = [dict(r) for r in rows]
         if not hits:
-            found = self.store.search(ref, limit=1)
+            found = self.store.search(ref, limit=1) if fuzzy else []
             if found:
                 return found[0][0]
             raise NotFound(f"no graph node matches {ref!r}")

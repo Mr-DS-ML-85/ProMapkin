@@ -12,7 +12,7 @@ from promapkin import blueprint, evidence as ev, knowledge, maintenance
 from promapkin.agents import orchestrator
 from promapkin.agents.contract import RESULT_SCHEMA, TaskContract, merge_result
 from promapkin.config import Workspace
-from promapkin.graph import Graph
+from promapkin.graph import Graph, NotFound
 from promapkin.handoff import Handoffs
 from promapkin.retrieval import Retriever, render_context
 from promapkin.security import safe_path
@@ -552,26 +552,34 @@ class Service:
             hits = Retriever(self.ws, rt).search(text or ref or "", limit=limit, kinds=kinds)
             return {"method": "lexical (ML disabled)", "results": hits}
         model = graph_model_name(rt.embedder.name)
+        nid = None
         if ref:
-            nid = self.graph.resolve(ref)
+            try:
+                nid = self.graph.resolve(ref, fuzzy=False)
+            except NotFound:
+                if text:
+                    raise
+                text = ref   # not a node: treat it as a free-text query
+        if nid:
             vecs = dict(self.store.embeddings(model))
             if nid not in vecs:
                 raise ServiceError(f"no embedding for {nid}")
             q = unpack(vecs[nid])
         elif text:
+            # Free text is embedded by the text model, so it is scored against text-model vectors, not graph ones.
             q = rt.embedder.embed([text])[0]
             model = rt.embedder.name
         else:
             raise ServiceError("give ref or text")
         res = []
-        for nid, score in top_k(q, self.store.embeddings(model), limit * 3):
-            n = self.store.node(nid)
-            if not n or nid == ref or (kinds and n["kind"] not in kinds):
+        for hit, score in top_k(q, self.store.embeddings(model), limit * 3):
+            n = self.store.node(hit)
+            if not n or (nid and hit == nid) or (kinds and n["kind"] not in kinds):
                 continue
-            res.append({**self.graph.node_summary(nid), "similarity": round(score, 4)})
+            res.append({**self.graph.node_summary(hit), "similarity": round(score, 4)})
             if len(res) >= limit:
                 break
-        return {"method": f"cosine over {model}", "results": res}
+        return {"method": f"cosine over {model}", "query": nid or text, "results": res}
 
     # ------------------------------------------------------------------ benchmark
     def benchmark(self, spec: dict[str, Any] | None = None, budget: int = 2000, limit: int = 40) -> dict[str, Any]:
