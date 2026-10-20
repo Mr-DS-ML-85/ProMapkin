@@ -113,6 +113,39 @@ promapkin ask "what happens between the HTTP route and the database?"   # LLM ag
 promapkin --llm review                                # review uncommitted changes against the graph
 ```
 
+`ask` lets the model pick Promapkin's own read-only tools, then answers with sources and keeps observed facts
+apart from inferred ones. A real run against a local OpenAI-compatible model (output trimmed):
+
+```text
+$ promapkin --llm openai --base-url http://localhost:8080/v1 ask "can you tell me the fragmented parts of the code"
+→ get_surprising_connections {"limit": 30}
+→ get_communities {}
+→ get_architecture_map {}
+→ get_risk_register {}
+→ get_design_patterns {}
+→ get_project_overview {}
+→ search_graph {"query": "duplicate solver implementation repeated logic across modules", "limit": 15}
+→ get_node {"node": "module:src", "limit": 10}
+→ get_index_status {}
+
+## 1. Duplicate / competing solver implementations (the biggest fragment)
+There are at least three separate implementations of the same "detect challenge type → route to a solver"
+idea ... `src/pow/solver.py:489` (`PoWSolverFactory`) and `page-agent/solvers/universal.py` each define their
+own `PoWSolution` ...
+
+## 2. An empty root package that everything imports
+## 3. `capify` is split across two codebases
+## 4. Low-cohesion communities          (table: community · cohesion · members)
+## 5. Layer violations (24 total)
+## 6. page-agent is itself split
+## 7. Test-coverage fragmentation
+
+Observed (AST-parsed): the duplicate solver symbols, the import edges, the 24 layer violations ...
+Inferred (ML classifier / heuristic): the community/cohesion numbers ...
+
+[openai/<local model>] 6 call(s), 0 cached · 78,534 in / 5,378 out tokens · 0 fallback(s) · 0 secret(s) redacted
+```
+
 With `--llm`:
 - Files without a real parser are extracted by the model. Every reported symbol and call must be found at its
   line in the source, or it is dropped.
