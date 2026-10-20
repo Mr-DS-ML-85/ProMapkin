@@ -69,6 +69,11 @@ TOOLS: list[Tool] = [
     # ---------------------------------------------------------------- project & index
     _t("get_index_status", "Revision, freshness (pending file changes), counts, handoffs, queued agent tasks and "
        "ML tier of the Promapkin index.", obj({}), lambda s, a: s.status()),
+    _t("get_session_brief", "Compact orientation for the start of a session: index freshness, languages, "
+       "architecture, subsystems, entry points, infrastructure, most depended-on symbols, open handoffs and their "
+       "constraints (about 1k tokens).", obj({"max_chars": I}),
+       lambda s, a: {"brief": __import__("promapkin.brief", fromlist=["brief"]).brief(s.ws, max_chars=a.get(
+           "max_chars", 4000))}),
     _t("scan_repository", "Index the repository (incremental by default; full=true re-extracts everything). Never "
        "executes repository code.", obj({"full": B}), lambda s, a: s.scan(full=a.get("full", False)), False),
     _t("sync_repository", "Incremental re-analysis: rescan changed files and re-run only the affected blueprint "

@@ -259,6 +259,23 @@ def build_parser() -> argparse.ArgumentParser:
     a2.add_argument("provider", choices=["anthropic", "openai"])
     aus.add_parser("status")
 
+    ins = sub.add_parser("install", help="wire Promapkin into a coding assistant: MCP server, instructions, hooks, "
+                                       "commands (merge-safe; see `install --list`)")
+    ins.add_argument("--platform", "-p", action="append", default=[],
+                     help="assistant to set up (repeatable): claude-code, codex, gemini, opencode, vscode, cursor, "
+                          "windsurf, cline, roo, kiro, zed, continue, amazonq, junie, goose, crush, augment, trae, "
+                          "agents-md")
+    ins.add_argument("--detected", action="store_true", help="every assistant this repository already shows signs of")
+    ins.add_argument("--list", action="store_true", help="list platforms and what is detected here")
+    ins.add_argument("--dry-run", action="store_true", help="show what would change, write nothing")
+    ins.add_argument("--portable", action="store_true",
+                     help="write `promapkin` as the command (needs it on PATH) instead of this interpreter's path")
+    uns = sub.add_parser("uninstall", help="remove what `promapkin install` added (all, or --platform ...)")
+    uns.add_argument("--platform", "-p", action="append", default=[])
+    bf = sub.add_parser("brief", help="compact factual orientation for an agent session (used by SessionStart hooks)")
+    bf.add_argument("--sync", action="store_true", help="incrementally update the index first (if one exists)")
+    bf.add_argument("--max-chars", type=int, default=4000)
+
     pa = sub.add_parser("parsers", help="optional real parsers: TypeScript compiler and tree-sitter grammars")
     pas = pa.add_subparsers(dest="parsers_cmd", required=True)
     pas.add_parser("status")
@@ -504,6 +521,43 @@ def main(argv: list[str] | None = None) -> int:
         ws.close()
 
 
+def _install(args: argparse.Namespace, ws: Workspace) -> int:
+    from promapkin import installer
+    detected = installer.detect(ws.root)
+    if args.list or not (args.platform or args.detected):
+        rows = [{"platform": p.name, "title": p.title, "format_confidence": p.verified, "mcp_scope": p.scope,
+                 "detected": p.name in detected} for p in installer.PLATFORMS.values()]
+        emit(args, {"platforms": rows, "detected": detected},
+             lambda d: "\n".join([f"{'*' if r['detected'] else ' '} {r['platform']:<12} {r['title']:<32} "
+                                  f"format: {r['format_confidence']:<6} mcp: {r['mcp_scope']}" for r in d["platforms"]] +
+                                 ["", "* = detected in this repository/machine",
+                                  "usage: promapkin install --platform claude-code [--platform cursor ...] "
+                                  "| --detected [--dry-run]"]))
+        return 0
+    platforms = list(dict.fromkeys(args.platform + (detected if args.detected else [])))
+    if not platforms:
+        print("no assistants detected; name one with --platform", file=sys.stderr)
+        return 2
+    if not ws.initialized:
+        ws.init()
+    r = installer.install(ws.root, platforms, dry_run=args.dry_run, portable=args.portable)
+
+    def human(d: dict[str, Any]) -> str:
+        lines = [f"{'Would set up' if d['dry_run'] else 'Set up'}: " +
+                 ", ".join(f"{p['title']} (format confidence: {p['verified']})" for p in d["platforms"]),
+                 f"MCP command: {d['command']} --root <repo> mcp serve"]
+        lines += [f"  {c['status']:<8} {c['path']}" + (f"  [{c['event']} hook]" if c.get("event") else "")
+                  for c in d["changes"]]
+        if d["unchanged"]:
+            lines.append(f"  ({d['unchanged']} already up to date)")
+        lines += [f"note: {n}" for n in d["notes"]]
+        if not d["dry_run"]:
+            lines.append("Undo with: promapkin uninstall" + "".join(f" -p {p['platform']}" for p in d["platforms"]))
+        return "\n".join(lines)
+    emit(args, r, human)
+    return 0
+
+
 def _run(args: argparse.Namespace, ws: Workspace) -> int:
     cmd = args.cmd
     if cmd == "mcp" and args.mcp_cmd == "serve":
@@ -525,6 +579,19 @@ def _run(args: argparse.Namespace, ws: Workspace) -> int:
         cfg = {"mcpServers": {"promapkin": {"command": sys.executable,
                                             "args": ["-m", "promapkin", "--root", str(ws.root), "mcp", "serve"]}}}
         print(json.dumps(cfg, indent=2))
+        return 0
+    if cmd == "install":
+        return _install(args, ws)
+    if cmd == "uninstall":
+        from promapkin import installer
+        r = installer.uninstall(ws.root, args.platform or None)
+        emit(args, r, lambda d: "\n".join([f"{x['action']}: {x['path']}" for x in d["removed"]] +
+                                          [f"note: {n}" for n in d["notes"]]) or "nothing to remove")
+        return 0
+    if cmd == "brief":
+        from promapkin.brief import brief
+        text = brief(ws, sync=args.sync, max_chars=args.max_chars)
+        emit(args, {"brief": text}, lambda d: d["brief"])
         return 0
     if cmd == "init":
         created = ws.init()
