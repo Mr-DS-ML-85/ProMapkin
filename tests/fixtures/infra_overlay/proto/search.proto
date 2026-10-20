@@ -1,0 +1,11 @@
+syntax = "proto3";
+package search.v1;
+
+message QueryRequest { string q = 1; int32 limit = 2; }
+message Hit { string id = 1; double score = 2; }
+message QueryResponse { repeated Hit hits = 1; }
+
+service Search {
+  rpc Query (QueryRequest) returns (QueryResponse);
+  rpc Watch (QueryRequest) returns (stream Hit);
+}

@@ -107,10 +107,20 @@ TOOLS: list[Tool] = [
     _t("run_specialist", f"Run one specialist agent ({', '.join(SECTIONS)}) over its bounded scope and return its "
        "structured section.", obj({"specialist": {"type": "string", "enum": SECTIONS}, "goal": S}, ["specialist"]),
        lambda s, a: s.run_specialist(a["specialist"], a.get("goal")), False),
+    _t("get_infrastructure", "Deployables (containers, Compose services, Kubernetes workloads) with the code they "
+       "run, what routes to them and the config they set; ingress; Terraform resources by category with their "
+       "dependencies; CI pipelines; and the configuration surface (keys read by code but never declared, and the "
+       "reverse).", obj({}), lambda s, a: s.infrastructure()),
+    _t("get_data_model", "Tables and views (columns, keys, foreign keys), ORM classes mapped to them, the symbols that "
+       "read and write each table, migrations, GraphQL/protobuf/OpenAPI schema types, endpoints by protocol, and "
+       "API-spec coverage (spec operations without code, code endpoints missing from the spec).", obj({}),
+       lambda s, a: s.data_model()),
     _t("render_diagram", "Mermaid source for architecture | dataflow | patterns | roadmap | neighborhood (focus) | "
-       "dependencies | map (focus=map id). Dotted edges = inferred evidence.",
+       "dependencies | map (focus=map id) | infrastructure | er (entity-relationship). Dotted edges = inferred "
+       "evidence.",
        obj({"kind": {"type": "string", "enum": ["architecture", "dataflow", "patterns", "roadmap", "neighborhood",
-                                                "dependencies", "map"]}, "focus": S, "depth": I}, ["kind"]),
+                                                "dependencies", "map", "infrastructure", "er"]}, "focus": S,
+            "depth": I}, ["kind"]),
        lambda s, a: s.diagram(a["kind"], a.get("focus"), a.get("depth", 1))),
 
     # ---------------------------------------------------------------- graph: read

@@ -25,7 +25,8 @@ from typing import Any, Callable
 from promapkin import evidence as ev
 from promapkin import gitutil
 from promapkin.config import Workspace
-from promapkin.extract import SNIFF, Facts, extractor_for, is_generated, is_test_path, language_of
+from promapkin.extract import NON_CODE, SNIFF, Facts, data_links, extractor_for, is_generated, is_test_path, \
+    language_of
 from promapkin.security import MAX_FILE_BYTES, is_probably_binary
 from promapkin.store import Store
 
@@ -88,8 +89,10 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
                 continue
             if is_probably_binary(data):
                 continue
-            if lang in SNIFF:   # shared extensions (.m: Objective-C or MATLAB; .v: Verilog or V)
+            if lang in SNIFF:   # by content: .m (Objective-C/MATLAB), .v (Verilog/V), YAML/JSON infrastructure
                 lang = language_of(rel, data[:4000].decode("utf-8", "replace"))
+                if not lang:
+                    continue
             contents[rel] = (gitutil.sha_of(data), lang, len(data))
         changed = [p for p, (sha, _, _) in contents.items() if full or old.get(p) != sha]
         deleted = [p for p in old if p not in contents]
@@ -110,6 +113,11 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
             parser = "typescript-compiler" if facts else None
             if facts is None:
                 facts, parser = _extract_one(ws, p, contents[p][1], text, errors)
+            if facts is not None and contents[p][1] not in NON_CODE:
+                try:
+                    data_links.annotate(facts, text, contents[p][1])
+                except Exception as exc:  # noqa: BLE001 - data links are an enrichment; never lose the file
+                    errors.append(f"{p}: data links skipped ({type(exc).__name__}: {str(exc)[:120]})")
             extracted[p] = (text, is_generated(p, text), facts, parser)
         timer.mark("parse")
         with store.transaction():
@@ -599,6 +607,74 @@ class Resolver:
             self.last_ambiguous = non_test
         return None
 
+    # ---------------------------------------------------------------- infrastructure / data links
+    def resolve_link(self, target: str, ctx: dict[str, Any], revision: str) -> str | None:
+        """Targets of `link` references: ID:<node id>, TABLE:<name>, PRISMA:<model>, MODULE:<dotted>, FILE:<path>,
+        SYMBOL:<name>, LABELS:<k=v,...> (Kubernetes selectors) or API:<METHOD path> (spec -> code endpoint)."""
+        kind, _, key = target.partition(":")
+        if kind == "ID":
+            return key if self.store.node(key) else None
+        if kind == "TABLE":
+            for cand in (f"table:{key}", f"table:{key.rsplit('.', 1)[-1]}"):
+                if self.store.node(cand):
+                    return cand
+            if ctx.get("create"):
+                tid = f"table:{key}"
+                self.store.upsert_node(tid, "table", key, evidence=ctx.get("evidence") or ev.LEXICAL, confidence=0.6,
+                                       revision=revision, attrs={"inferred_from": "code", "columns": []})
+                return tid
+            return None
+        if kind == "PRISMA":
+            hit = self._prisma_models().get(key.lower())
+            return hit
+        if kind == "MODULE":
+            if key in self.modules:
+                return self.modules[key]["id"]
+            dst, _evidence = self.resolve_module_import(key, None, "")
+            return dst if dst and dst.startswith("module:") else None
+        if kind == "FILE":
+            path = _normpath(key)
+            if path in self.files:
+                return f"file:{path}"
+            hits = [f for f in self.files if f.endswith("/" + path)]
+            return f"file:{hits[0]}" if len(hits) == 1 else None
+        if kind == "SYMBOL":
+            hit = self.resolve_symbol(key, {})
+            return hit[0] if hit else None
+        if kind == "LABELS":
+            want = dict(kv.split("=", 1) for kv in key.split(",") if "=" in kv)
+            hits = [n["id"] for n in self._workloads() if want and all(
+                str(n["attrs"].get("labels", {}).get(k)) == v for k, v in want.items())]
+            return hits[0] if len(hits) == 1 else (hits[0] if hits else None)
+        if kind == "API":
+            method, _, route = key.partition(" ")
+            return self._endpoints().get((method.upper(), _route_shape(route)))
+        return None
+
+    def _prisma_models(self) -> dict[str, str]:
+        if not hasattr(self, "_prisma"):
+            self._prisma = {}
+            for n in self.store.nodes("table"):
+                model = n["attrs"].get("model")
+                if model:
+                    self._prisma[model.lower()] = n["id"]
+                    self._prisma[model[:1].lower() + model[1:]] = n["id"]
+        return self._prisma
+
+    def _workloads(self) -> list[dict[str, Any]]:
+        if not hasattr(self, "_workload_nodes"):
+            self._workload_nodes = self.store.nodes("deployment")
+        return self._workload_nodes
+
+    def _endpoints(self) -> dict[tuple[str, str], str]:
+        if not hasattr(self, "_endpoint_index"):
+            self._endpoint_index = {}
+            for n in self.store.nodes("endpoint"):
+                method, _, route = n["name"].partition(" ")
+                if route.startswith("/"):
+                    self._endpoint_index.setdefault((method.upper(), _route_shape(route)), n["id"])
+        return self._endpoint_index
+
     def resolve_doc_mention(self, name: str) -> str | None:
         name = name.replace("::", ".").rstrip("()")
         if name in self.by_qual:
@@ -711,6 +787,15 @@ def resolve(store: Store, revision: str, ambiguous: list[dict[str, Any]] | None 
                 store.add_edge(src, dst, "verifies", evidence=evidence, confidence=conf * 0.9, file=owner, line=line,
                                owner_file=owner, revision=revision, attrs={**attrs, "via": "test call"})
             resolved += 1
+        elif typ == "link":
+            dst = r.resolve_link(target, ctx, revision)
+            if not dst or dst == src:
+                unresolved += 1
+                continue
+            store.add_edge(src, dst, ctx.get("edge", "references"), evidence=ctx.get("evidence") or ev.MANIFEST,
+                           confidence=float(ctx.get("confidence", 1.0)), file=owner, line=line, owner_file=owner,
+                           revision=revision, attrs={**attrs, **(ctx.get("attrs") or {})})
+            resolved += 1
         elif typ in ("mentions", "links"):
             name = target
             if typ == "links":
@@ -739,6 +824,12 @@ def resolve(store: Store, revision: str, ambiguous: list[dict[str, Any]] | None 
             "resolution": "full" if files is None else f"incremental ({len(files)} files)"}
 
 
+def _route_shape(route: str) -> str:
+    """`/items/{id}`, `/items/:id` and `/items/<int:id>` all become `/items/{}`."""
+    shape = re.sub(r"\{[^}]*\}|:[A-Za-z_]\w*|<[^>]*>", "{}", route.split("?")[0])
+    return shape.rstrip("/") or "/"
+
+
 def _chunked(seq: list[str], n: int) -> list[list[str]]:
     return [seq[i:i + n] for i in range(0, len(seq), n)]
 
@@ -756,7 +847,9 @@ def _defined_names(store: Store, files: set[str]) -> set[str]:
         marks = ",".join("?" * len(chunk))
         for row in store.conn.execute(
                 f"SELECT name, qualname FROM nodes WHERE owner_file IN ({marks}) "
-                f"AND kind IN ('module','class','function','method','test','endpoint')", chunk):
+                f"AND kind IN ('module','class','function','method','test','endpoint','table','service',"
+                f"'deployment','cloud_resource','iac_module','iac_variable','container_image','schema_type',"
+                f"'config_source','manifest')", chunk):
             names.add(row[0])
             if row[1]:
                 names.add(row[1])
@@ -1019,7 +1112,7 @@ def _mark_stale(store: Store, changed_files: set[str]) -> int:
 
 
 def _gc_shared(store: Store) -> None:
-    kinds = ",".join(f"'{k}'" for k in SHARED_KINDS)
+    kinds = ",".join(f"'{k}'" for k in SHARED_KINDS | {"table"})   # tables inferred from code have no owner
     store.delete_nodes(f"kind IN ({kinds}) AND owner_file IS NULL AND id NOT IN (SELECT dst FROM edges) "
                        f"AND id NOT IN (SELECT src FROM edges)")
 

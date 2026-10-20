@@ -171,7 +171,22 @@ class Service:
             if not focus:
                 raise ServiceError("focus (map id) is required")
             return {"kind": kind, "format": "mermaid", "source": self.get_map(focus)["mermaid"]}
-        raise ServiceError("kind must be architecture|dataflow|patterns|roadmap|neighborhood|dependencies|map")
+        if kind in ("infrastructure", "er"):
+            from promapkin import infra_view
+            fn = infra_view.mermaid_infrastructure if kind == "infrastructure" else infra_view.mermaid_er
+            return {"kind": kind, "format": "mermaid", "source": fn(self.store)}
+        raise ServiceError("kind must be architecture|dataflow|patterns|roadmap|neighborhood|dependencies|map|"
+                           "infrastructure|er")
+
+    def infrastructure(self) -> dict[str, Any]:
+        self._require_index()
+        from promapkin import infra_view
+        return infra_view.infrastructure(self.store)
+
+    def data_model(self) -> dict[str, Any]:
+        self._require_index()
+        from promapkin import infra_view
+        return infra_view.data_model(self.store)
 
     # ------------------------------------------------------------------ graph (read)
     def search(self, query: str, limit: int = 20, kinds: list[str] | None = None) -> dict[str, Any]:

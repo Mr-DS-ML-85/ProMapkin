@@ -141,7 +141,10 @@ def build_parser() -> argparse.ArgumentParser:
     src = grs.add_parser("source", help="show source for a node or path[:a-b]")
     src.add_argument("ref")
     dg = grs.add_parser("diagram", help="Mermaid diagram")
-    dg.add_argument("kind", choices=["architecture", "dataflow", "patterns", "roadmap", "neighborhood",
+    grs.add_parser("infra", help="deployables, routing, cloud resources, pipelines, config surface")
+    grs.add_parser("schema", help="tables, keys, ORM mappings, readers/writers, API schemas and spec coverage")
+    dg.add_argument("kind", choices=["infrastructure", "er", "architecture", "dataflow", "patterns", "roadmap",
+                                     "neighborhood",
                                      "dependencies", "map"])
     dg.add_argument("--focus")
     mp = grs.add_parser("map", help="create a named map from nodes")
@@ -521,6 +524,54 @@ def main(argv: list[str] | None = None) -> int:
         ws.close()
 
 
+def _fmt_infra(d: dict[str, Any]) -> str:
+    def short(x: str) -> str:
+        return x.split(":", 1)[-1] if not x.startswith("symbol:") else x.rsplit(":", 1)[-1]
+    out = []
+    for i in d["ingress"]:
+        out.append(f"ingress {', '.join(h for h in i['hosts'] if h) or i['id']} -> {', '.join(map(short, i['routes_to']))}")
+    for x in d["deployables"]:
+        parts = [f"{x['kind']:<15} {x['name']:<24}"]
+        for key, label in (("routes_to", "routes to"), ("runs_code", "runs"), ("builds", "built from"),
+                           ("depends_on", "depends on")):
+            if x[key]:
+                parts.append(f"{label} {', '.join(map(short, x[key]))}")
+        if x["config"]:
+            parts.append(f"config {', '.join(x['config'][:6])}")
+        out.append("  ".join(parts) + f"  ({x['location']})")
+    for cat, items in d["cloud_resources"].items():
+        out.append(f"{cat}: " + ", ".join(f"{i['type']}.{i['id'].rsplit('.', 1)[-1]}" for i in items))
+    for p in d["pipelines"]:
+        out.append(f"pipeline {p['name']} [{', '.join(p['triggers'])}] jobs {', '.join(p['jobs'])}"
+                   + (f" runs {', '.join(map(short, p['runs_code']))}" if p["runs_code"] else ""))
+    cs = d["configuration"]
+    if cs["read_but_never_declared"]:
+        out.append("config read by code, declared nowhere: " + ", ".join(cs["read_but_never_declared"]))
+    if cs["declared_but_never_read"]:
+        out.append("config declared, never read by code: " + ", ".join(cs["declared_but_never_read"][:20]))
+    return "\n".join(out) or "no infrastructure files indexed (Dockerfile, compose, Kubernetes, Terraform, CI, OpenAPI)"
+
+
+def _fmt_schema(d: dict[str, Any]) -> str:
+    out = []
+    for t in d["tables"]:
+        cols = ", ".join(c["name"] + ("*" if c["name"] in t["primary_key"] else "") for c in t["columns"][:10])
+        refs = "; refs " + ", ".join(r["table"] for r in t["references"]) if t["references"] else ""
+        acc = f"; read by {len(t['read_by'])}, written by {len(t['written_by'])}" if t["read_by"] or t["written_by"] \
+            else ""
+        orm = "; ORM " + ", ".join(c.rsplit(":", 1)[-1] for c in t["orm_classes"]) if t["orm_classes"] else ""
+        out.append(f"{'view ' if t['view'] else 'table'} {t['name']} ({cols}){refs}{orm}{acc}  [{t['defined_by']}]")
+    for s in d["schema_types"][:40]:
+        out.append(f"type  {s['name']} [{s['format']}] {', '.join(map(str, s['fields'][:8]))}")
+    if d["endpoints_by_protocol"]:
+        out.append("endpoints: " + ", ".join(f"{k} {v}" for k, v in d["endpoints_by_protocol"].items()))
+    spec = d["api_spec"]
+    if spec["operations"]:
+        out.append(f"API spec: {spec['operations']} operations; not implemented: {', '.join(spec['unimplemented']) or 'none'}"
+                   f"; missing from spec: {', '.join(spec['undocumented']) or 'none'}")
+    return "\n".join(out) or "no tables or schemas indexed"
+
+
 def _install(args: argparse.Namespace, ws: Workspace) -> int:
     from promapkin import installer
     detected = installer.detect(ws.root)
@@ -870,6 +921,10 @@ def _graph(args: argparse.Namespace, svc: Service) -> int:
         emit(args, svc.dataflow(args.ref), fmt_flows)
     elif c == "deps":
         emit(args, svc.dependencies(args.module))
+    elif c == "infra":
+        emit(args, svc.infrastructure(), _fmt_infra)
+    elif c == "schema":
+        emit(args, svc.data_model(), _fmt_schema)
     elif c == "similar":
         emit(args, svc.similar(args.ref, args.text))
     elif c == "source":

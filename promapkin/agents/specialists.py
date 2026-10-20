@@ -235,6 +235,8 @@ def architecture(ctx: Ctx) -> dict[str, Any]:
                 operations=dict(Counter(u["type"] for u in users))))
 
     styles = _styles(ctx, layers, violations)
+    from promapkin import infra_view
+    infra_claims, data_claims = infra_view.claims(s)
     clusters = graph_ml.cluster_modules(s, _graph_model(ctx) if ctx.ml else None)
     cycles = find_cycles(g.module_dependencies())
 
@@ -252,6 +254,8 @@ def architecture(ctx: Ctx) -> dict[str, Any]:
                                 [f"{e['file']}:{e['line']}" for e in s.edges(dst=c["id"])[:3] if e.get("file")])
                           for c in s.nodes("config")],
         "styles": styles,
+        "infrastructure": infra_claims,
+        "data_model": data_claims,
         "semantic_components": clusters,
         "dependency_cycles": [[c.removeprefix("module:") for c in cyc] for cyc in cycles],
     }

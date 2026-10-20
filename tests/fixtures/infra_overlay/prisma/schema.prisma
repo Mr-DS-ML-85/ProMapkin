@@ -1,0 +1,18 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id    Int    @id @default(autoincrement())
+  email String @unique
+  posts Post[]
+  @@map("users")
+}
+
+model Post {
+  id       Int  @id
+  title    String
+  author   User @relation(fields: [authorId], references: [id])
+  authorId Int
+}

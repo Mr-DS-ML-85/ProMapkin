@@ -1,0 +1,22 @@
+openapi: 3.0.3
+info:
+  title: Search API
+  version: "1.0"
+paths:
+  /search:
+    get:
+      operationId: search_endpoint
+      summary: Search indexed documents
+  /documents:
+    post:
+      summary: Add a document
+  /missing:
+    get:
+      summary: Not implemented anywhere
+components:
+  schemas:
+    Doc:
+      type: object
+      properties:
+        id: {type: string}
+        text: {type: string}

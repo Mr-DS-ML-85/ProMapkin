@@ -1,0 +1,17 @@
+"""Search API"""
+type Query {
+  search(q: String!, limit: Int): [Doc!]!
+  doc(id: ID!): Doc
+}
+
+type Mutation {
+  addDocument(text: String!): Doc!
+}
+
+type Doc {
+  id: ID!
+  text: String
+  tags: [Tag!]
+}
+
+type Tag { label: String! }

@@ -27,7 +27,7 @@ HUB_PREFIXES = {"package", "resource", "config", "dir", "repo", "file", "manifes
 STRUCTURAL_TRACE_EDGES = {"calls", "routes_to", "instantiates", "reads", "writes", "invokes", "depends_on",
                           "imports", "overrides", "exposes", "contains", "defines", "references", "inherits",
                           "implements", "produces", "consumes", "raises"}
-SINK_KINDS = {"resource", "config", "package", "service"}
+SINK_KINDS = {"resource", "config", "package", "service", "table", "cloud_resource", "config_source"}
 
 
 class NotFound(LookupError):

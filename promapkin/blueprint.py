@@ -168,6 +168,12 @@ def _md_architecture(s: dict[str, Any]) -> list[str]:
     out += ["", "## External integrations", ""] + [bullet(c) for c in s["external_integrations"]]
     if s["configuration"]:
         out += ["", "## Configuration", ""] + [bullet(c) for c in s["configuration"]]
+    if s.get("infrastructure"):
+        out += ["", "## Infrastructure", "", "Deployables, cloud resources and pipelines, linked to the code they run "
+                "(`diagrams/infrastructure.mmd`).", ""] + [bullet(c) for c in s["infrastructure"]]
+    if s.get("data_model"):
+        out += ["", "## Data model", "", "Tables from DDL, Prisma and code, with keys, ORM mappings and access "
+                "(`diagrams/er.mmd`).", ""] + [bullet(c) for c in s["data_model"]]
     if s["semantic_components"]:
         out += ["", "## Semantic components", "",
                 "Groups of modules that belong together by imports and meaning (see `method`).", ""]
@@ -336,6 +342,13 @@ def write(ws: Workspace, result: dict[str, Any]) -> list[str]:
         if name in result:
             p = out_dir / "diagrams" / f"{name}.mmd"
             p.write_text(fn(result[name]) + "\n")
+            written.append(str(p.relative_to(ws.root)))
+    if "architecture" in result and (result["architecture"].get("infrastructure") or
+                                     result["architecture"].get("data_model")):
+        from promapkin import infra_view
+        for name, fn in (("infrastructure", infra_view.mermaid_infrastructure), ("er", infra_view.mermaid_er)):
+            p = out_dir / "diagrams" / f"{name}.mmd"
+            p.write_text(fn(ws.store) + "\n")
             written.append(str(p.relative_to(ws.root)))
     # Merge into the machine-readable blueprint so partial regenerations keep other sections.
     jpath = out_dir / "blueprint.json"

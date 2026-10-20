@@ -39,17 +39,17 @@ def brief(ws: Workspace, sync: bool = False, max_chars: int = 4000) -> str:
     changed = sum(pend.values()) if isinstance(pend, dict) else 0
     out.append(f"Promapkin index of {ov.get('repository')} at {str(st.get('indexed_revision'))[:12]}"
                f"{'' if st.get('index_fresh') else f'; {changed} file(s) changed since indexing'} {note}".rstrip())
-    langs = sorted(ov.get("languages", {}).items(), key=lambda kv: -kv[1].get("files", 0))
+    langs = sorted((ov.get("languages") or {}).items(), key=lambda kv: -kv[1].get("files", 0))
     langs = [(k, v) for k, v in langs if k not in ("manifest", "markdown", "text")]
     if langs:
         out.append("Languages: " + ", ".join(f"{k} ({v['files']} files)" for k, v in langs[:8]))
-    styles = [s["statement"] for s in ov.get("styles", [])[:4]]
+    styles = [s["statement"] for s in (ov.get("styles") or [])[:4]]
     if styles:
         out.append("Architecture: " + "; ".join(styles))
-    subs = ov.get("subsystems", [])[:12]
+    subs = (ov.get("subsystems") or [])[:12]
     if subs:
         out.append("Subsystems: " + ", ".join(f"{s['name']} [{s.get('layer') or '?'}]" for s in subs))
-    entries = ov.get("entry_points", [])[:6]
+    entries = (ov.get("entry_points") or [])[:6]
     if entries:
         out.append("Entry points: " + "; ".join(_entry(e) for e in entries))
     infra = _infra(ws)

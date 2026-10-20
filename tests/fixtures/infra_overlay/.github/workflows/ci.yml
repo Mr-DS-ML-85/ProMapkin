@@ -1,0 +1,14 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      API_TOKEN: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pytest -q
+      - run: |
+          python -m searchapp.cli --help
