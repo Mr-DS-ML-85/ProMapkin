@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init", help="create .promapkin/ in the repository")
     sc = sub.add_parser("scan", help="index the repository (incremental)")
     sc.add_argument("--full", action="store_true", help="re-extract every file")
+    sc.add_argument("--watch", action="store_true", help="keep watching and re-index on change (= promapkin watch)")
+    sc.add_argument("--wiki", action="store_true", help="also write the Markdown wiki (= promapkin wiki)")
     sub.add_parser("sync", help="incremental scan + re-run affected blueprint specialists")
     v = sub.add_parser("verify", help="detect stale knowledge, contradictions and integrity problems")
     v.add_argument("--strict", action="store_true", help="exit 1 when issues are found")
@@ -126,7 +129,9 @@ def build_parser() -> argparse.ArgumentParser:
     hb = grs.add_parser("hubs", help="most-connected symbols (god nodes)")
     hb.add_argument("--limit", type=int, default=25)
     grs.add_parser("communities", help="module communities")
-    sp = grs.add_parser("surprises", help="rare observed links between communities")
+    sp = grs.add_parser("surprises", help="rare observed links between communities (--semantic: look-alike code)")
+    sp.add_argument("--semantic", action="store_true",
+                    help="similar code in separate communities with no link between them (duplicate logic)")
     sp.add_argument("--limit", type=int, default=20)
     hx = grs.add_parser("html", help="write an interactive HTML graph explorer")
     hx.add_argument("--out")
@@ -142,6 +147,18 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("ref")
     dg = grs.add_parser("diagram", help="Mermaid diagram")
     grs.add_parser("infra", help="deployables, routing, cloud resources, pipelines, config surface")
+    gx = grs.add_parser("export", help="the whole graph as JSON or GraphML (with hyperedges)")
+    gx.add_argument("--format", choices=["json", "graphml"], default="json")
+    gx.add_argument("--out", help="default: .promapkin/exports/graph.<format>")
+    gm = grs.add_parser("merge", help="merge repositories or JSON exports into one cross-repo workspace")
+    gm.add_argument("sources", nargs="+", help="repository directories (indexed) or graph.json exports")
+    gm.add_argument("--out", required=True, help="directory for the merged workspace")
+    gc = grs.add_parser("callflow", help="Mermaid call-flow diagrams from entry points (HTML + .mmd)")
+    gc.add_argument("entry", nargs="?", help="symbol, endpoint or module (default: all entry points)")
+    gc.add_argument("--depth", type=int, default=4)
+    gc.add_argument("--out", help="default: .promapkin/blueprints/callflow.html")
+    gy = grs.add_parser("hyperedges", help="n-ary relations: co-change sets, data flows, pattern roles, communities")
+    gy.add_argument("--kind", action="append", choices=["co_change", "flow", "pattern", "community"])
     ga = grs.add_parser("assets", help="PDFs, Office files, images and videos with extracted text/metadata")
     ga.add_argument("--media", choices=["pdf", "office", "image", "video"])
     grs.add_parser("schema", help="tables, keys, ORM mappings, readers/writers, API schemas and spec coverage")
@@ -277,6 +294,36 @@ def build_parser() -> argparse.ArgumentParser:
                      help="write `promapkin` as the command (needs it on PATH) instead of this interpreter's path")
     uns = sub.add_parser("uninstall", help="remove what `promapkin install` added (all, or --platform ...)")
     uns.add_argument("--platform", "-p", action="append", default=[])
+    pr = sub.add_parser("prs", help="pull-request dashboard: CI, reviews, worktrees, graph impact, conflict risk")
+    pr.add_argument("number", nargs="?", help="PR number (GitHub) or branch name (--local) for a deep dive")
+    pr.add_argument("--local", action="store_true", help="use unmerged local branches instead of GitHub")
+    pr.add_argument("--github", action="store_true", help="require GitHub (gh CLI or GITHUB_TOKEN)")
+    pr.add_argument("--base", help="base branch for --local (default: origin HEAD, main or master)")
+    pr.add_argument("--triage", action="store_true", help="order the review queue (with --llm: model's ranking)")
+    pr.add_argument("--conflicts", action="store_true", help="only show merge-order risks between PRs")
+    pr.add_argument("--limit", type=int, default=30)
+    ad = sub.add_parser("add", help="add a paper (arXiv), video (YouTube), web page or file to the graph")
+    ad.add_argument("target", help="URL or local path")
+    ad.add_argument("--title")
+    ad.add_argument("--allow-private", action="store_true", help="allow URLs on private/internal hosts")
+    ad.add_argument("--no-scan", action="store_true", help="fetch only; index on the next scan")
+    so = sub.add_parser("sources", help="sources added with `promapkin add`")
+    sos = so.add_subparsers(dest="sources_cmd", required=True)
+    sos.add_parser("list")
+    sr = sos.add_parser("remove")
+    sr.add_argument("ref", help="URL, title or file of the source")
+    wk = sub.add_parser("wiki", help="agent-crawlable Markdown wiki of the codebase")
+    wk.add_argument("--out", help="default: .promapkin/wiki")
+    hk = sub.add_parser("hook", help="git hooks that re-index after commit, checkout, merge and rebase")
+    hks = hk.add_subparsers(dest="hook_cmd", required=True)
+    hi = hks.add_parser("install", help="add a background re-index to post-commit/checkout/merge/rewrite")
+    hi.add_argument("--blueprint", action="store_true", help="also refresh affected blueprint sections (sync)")
+    hks.add_parser("uninstall")
+    hks.add_parser("status")
+    wa = sub.add_parser("watch", help="re-index on file changes (polling; no LLM unless --llm)")
+    wa.add_argument("--interval", type=float, default=1.0, help="seconds between polls")
+    wa.add_argument("--debounce", type=float, default=1.5, help="quiet seconds before re-indexing")
+    wa.add_argument("--blueprint", action="store_true", help="also refresh affected blueprint sections")
     bf = sub.add_parser("brief", help="compact factual orientation for an agent session (used by SessionStart hooks)")
     bf.add_argument("--sync", action="store_true", help="incrementally update the index first (if one exists)")
     bf.add_argument("--max-chars", type=int, default=4000)
@@ -521,9 +568,71 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("interrupted; the index is unchanged (scans are transactional)", file=sys.stderr)
         return 130
+    except BrokenPipeError:   # output piped into `head` and the like
+        try:
+            sys.stdout = open(os.devnull, "w")
+        except OSError:
+            pass
+        return 0
     finally:
         _usage_line(args)
         ws.close()
+
+
+def _watch(ws: Workspace, args: argparse.Namespace, interval: float, debounce: float, sync: bool) -> int:
+    from promapkin import autoupdate
+
+    def show(e: dict[str, Any]) -> None:
+        if args.json:
+            print(json.dumps(e), flush=True)
+        elif e["event"] == "watching":
+            print(f"watching {e['files']} files (Ctrl-C to stop)", flush=True)
+        elif e["event"] == "rebuilt":
+            print(f"{time.strftime('%H:%M:%S')} re-indexed {e['count']} changed file(s) in {e['seconds']}s "
+                  f"{e['summary']}", flush=True)
+        else:
+            print(f"{time.strftime('%H:%M:%S')} {e['event']}: {e.get('error', '')}", file=sys.stderr, flush=True)
+    try:
+        autoupdate.watch(ws, interval, debounce, sync, on_event=show)
+    except KeyboardInterrupt:
+        print("stopped", file=sys.stderr)
+    return 0
+
+
+def _fmt_prs(d: dict[str, Any], conflicts_only: bool = False) -> str:
+    def short(x: str) -> str:
+        return x.rsplit(":", 1)[-1]
+    out = [f"{d['repository']} · {len(d['prs'])} open · source: {d['source']}"]
+    if not conflicts_only:
+        for p in d["prs"]:
+            g = p["graph"]
+            ci = p["ci"]["state"] + (f" ({', '.join(p['ci']['failing'][:2])})" if p["ci"].get("failing") else "")
+            out.append(f"\n{p['id']:<8} {p['title'][:70]}" + (" [draft]" if p.get("draft") else ""))
+            out.append(f"  {p.get('author') or '?'} · {p.get('branch')} → {p.get('base')} · CI {ci} · review "
+                       f"{p['review']['decision']}" + (f" · worktree {p['worktree']}" if p.get("worktree") else "")
+                       + (f" · {p['ahead']} ahead / {p['behind']} behind" if p.get("ahead") is not None else ""))
+            out.append(f"  risk {p['risk']['level']} ({p['risk']['score']}): " + ("; ".join(p["risk"]["reasons"])
+                                                                                or "small, contained change"))
+            out.append(f"  {len(p['files'])} files, {g['lines_changed']} lines · {len(g['changed_symbols'])} symbols"
+                       f" · communities: {', '.join(g['communities']) or '—'}")
+            if g["tests_to_run"]:
+                out.append(f"  tests to run: {', '.join(short(t) for t in g['tests_to_run'][:6])}"
+                           + (" …" if len(g["tests_to_run"]) > 6 else ""))
+    out.append("\nMerge-order risks:" if d["conflicts"] else "\nNo overlapping PRs.")
+    for c in d["conflicts"][:20]:
+        detail = c["shared_symbols"] or c["shared_files"] or c["shared_modules"] or c["shared_communities"]
+        out.append(f"  {c['level']:<6} {c['a']} × {c['b']}: {c['why']} ({', '.join(map(short, detail[:4]))})")
+    if d.get("triage"):
+        out.append("\nReview queue:")
+        for t in d["triage"]:
+            out.append(f"  {t['rank']}. {t['id']} {t['title'][:60]} — {t.get('llm_reason') or '; '.join(t['why'])}")
+    if d.get("detail"):
+        det = d["detail"]
+        out.append("\nChanged symbols: " + (", ".join(short(x) for x in det["changed_symbols"][:20]) or "none indexed"))
+        for k in ("decisions", "constraints"):
+            if det[k]:
+                out.append(f"{k.capitalize()} on these files: " + "; ".join(x["name"] for x in det[k][:8]))
+    return "\n".join(out)
 
 
 def _fmt_infra(d: dict[str, Any]) -> str:
@@ -641,6 +750,72 @@ def _run(args: argparse.Namespace, ws: Workspace) -> int:
         emit(args, r, lambda d: "\n".join([f"{x['action']}: {x['path']}" for x in d["removed"]] +
                                           [f"note: {n}" for n in d["notes"]]) or "nothing to remove")
         return 0
+    if cmd == "prs":
+        from promapkin import prs as prs_mod
+        Service(ws)._require_index()
+        source = "local" if args.local else "github" if args.github else "auto"
+        try:
+            r = prs_mod.dashboard(ws, source, args.limit, args.number, args.base, args.triage or False,
+                                  getattr(args, "_engine", None))
+        except prs_mod.PRError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        emit(args, r, lambda d: _fmt_prs(d, args.conflicts))
+        return 0
+    if cmd == "add":
+        from promapkin import sources
+        if not ws.initialized:
+            ws.init()
+        try:
+            rec = sources.add(ws, args.target, allow_private=args.allow_private, title=args.title)
+        except sources.SourceError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        if not args.no_scan:
+            rec["scan"] = {k: v for k, v in Service(ws).scan().items() if k in ("changed", "files", "seconds")}
+        emit(args, rec, lambda d: f"added {d['kind']}: {d.get('title') or d['source']}\n" +
+             "\n".join(f"  {f}" for f in d["files"]) +
+             (f"\nindexed ({d['scan']['changed']} changed file(s)); search it with `promapkin graph query`"
+              if d.get("scan") else ""))
+        return 0
+    if cmd == "sources":
+        from promapkin import sources
+        if args.sources_cmd == "list":
+            rows = sources.list_sources(ws)
+            emit(args, {"sources": rows}, lambda d: "\n".join(
+                f"{r['kind']:<8} {r.get('title') or r['source']}  ({', '.join(r['files'])})" for r in d["sources"])
+                or "no sources added (promapkin add <url|path>)")
+        else:
+            r = sources.remove(ws, args.ref)
+            if r["removed"]:
+                Service(ws).scan()
+            emit(args, r, lambda d: f"removed {len(d['removed'])} source(s)")
+        return 0
+    if cmd == "wiki":
+        from promapkin import exports
+        Service(ws)._require_index()
+        r = exports.wiki(ws, Path(args.out) if args.out else None)
+        emit(args, r, lambda d: f"wrote {d['pages']} pages ({d['subsystems']} subsystems, {d['modules']} modules) "
+                                f"to {d['path']}; start at index.md")
+        return 0
+    if cmd == "hook":
+        from promapkin import autoupdate
+        if not ws.initialized:
+            ws.init()
+        fn = {"install": lambda: autoupdate.install_hooks(ws.root, args.blueprint),
+              "uninstall": lambda: autoupdate.uninstall_hooks(ws.root),
+              "status": lambda: autoupdate.hook_status(ws.root)}[args.hook_cmd]
+        emit(args, fn(), lambda d: "\n".join(
+            [f"hooks: {d['hooks_dir']}"] + [f"  {h['status']:<13} {h['hook']}" for h in d.get("hooks", [])] +
+            ([f"  installed: {', '.join(d['installed']) or 'none'}"] if "installed" in d else []) +
+            ([f"runs: {d['runs']} in the background; log: {d['log']}",
+              "disable for one command with PROMAPKIN_HOOKS=0"] if "runs" in d else [])))
+        return 0
+    if cmd == "watch":
+        from promapkin import autoupdate
+        if not ws.initialized:
+            ws.init()
+        return _watch(ws, args, args.interval, args.debounce, args.blueprint)
     if cmd == "brief":
         from promapkin.brief import brief
         text = brief(ws, sync=args.sync, max_chars=args.max_chars)
@@ -687,6 +862,13 @@ def _run(args: argparse.Namespace, ws: Workspace) -> int:
         r = scan(ws, full=args.full, interactive=_interactive(args), ask=_ask,
                  progress=None if args.json else (lambda m: print(m, file=sys.stderr)))
         emit(args, dict(r), fmt_scan)
+        if args.wiki:
+            from promapkin import exports
+            w = exports.wiki(ws)
+            print(f"wiki: {w['pages']} pages in {w['path']}", file=sys.stderr)
+        if args.watch:
+            sys.stdout.flush()
+            return _watch(ws, args, 1.0, 1.5, False)
     elif cmd == "sync":
         r = maintenance.sync(ws, interactive=_interactive(args), ask=_ask)
         emit(args, r, lambda d: fmt_scan(d["scan"]) + (f"\nre-ran: {', '.join(d['rerun_sections'])}"
@@ -925,6 +1107,13 @@ def _graph(args: argparse.Namespace, svc: Service) -> int:
         emit(args, svc.communities(), lambda d: "\n".join(
             f"{c['component']:<32} {len(c['modules']):>4} modules  conf {c['confidence']:.2f}  ({c['method']})"
             for c in d["communities"]))
+    elif c == "surprises" and args.semantic:
+        from promapkin import insights, ml
+        rows = insights.semantic_surprises(svc.store, ml.runtime(svc.ws), args.limit)
+        emit(args, {"duplicates": rows}, lambda d: "\n".join(
+            f"  {r['similarity']:.2f}  {r['a'].rsplit(':', 1)[-1]} ({r['locations'][0]}) ~ "
+            f"{r['b'].rsplit(':', 1)[-1]} ({r['locations'][1]})  [{' / '.join(r['communities'])}]"
+            for r in d["duplicates"]) or "no look-alike code across communities (similarity edges need the ML tier)")
     elif c == "surprises":
         emit(args, svc.surprises(args.limit), lambda d: "\n".join(
             [f"{d['communities']} communities; {d['policy']}"] +
@@ -937,6 +1126,31 @@ def _graph(args: argparse.Namespace, svc: Service) -> int:
         emit(args, svc.dataflow(args.ref), fmt_flows)
     elif c == "deps":
         emit(args, svc.dependencies(args.module))
+    elif c == "export":
+        from promapkin import exports
+        out = Path(args.out) if args.out else svc.ws.dir / "exports" / f"graph.{args.format}"
+        emit(args, exports.write_export(svc.ws, out, args.format),
+             lambda d: f"wrote {d['path']} ({d['nodes']} nodes, {d['edges']} edges, {d['hyperedges']} hyperedges)")
+    elif c == "merge":
+        from promapkin import exports
+        r = exports.merge([Path(x) for x in args.sources], Path(args.out))
+        emit(args, r, lambda d: f"merged {', '.join(d['repositories'])} into {d['workspace']}: {d['nodes']} nodes, "
+                                f"{d['edges']} edges; cross-repo links {d['cross_repo_links'] or 'none found'}\n"
+                                f"query it with: promapkin --root {d['workspace']} graph query ...")
+    elif c == "callflow":
+        from promapkin import exports
+        flows = exports.callflow(svc.ws, args.entry, args.depth)
+        out = Path(args.out) if args.out else svc.ws.blueprint_dir / "callflow.html"
+        r = exports.callflow_html(svc.ws, out, flows, f"{svc.ws.root.name} call flow")
+        emit(args, {**r, "flows": flows}, lambda d: f"wrote {d['path']} ({d['diagrams']} diagram(s)) and .mmd sources"
+             if not args.entry else d["flows"][0]["mermaid"] + f"\n\n(HTML: {d['path']})")
+    elif c == "hyperedges":
+        from promapkin import insights
+        kinds = tuple(args.kind) if args.kind else ("co_change", "flow", "pattern", "community")
+        hs = insights.hyperedges(svc.store, svc.ws.root, kinds=kinds)
+        emit(args, {"hyperedges": hs}, lambda d: "\n".join(
+            f"{h['kind']:<10} {h['label'][:60]:<60} {len(h['members'])} members: "
+            + ", ".join(m.split(':', 1)[-1] for m in h["members"][:5]) for h in d["hyperedges"]) or "none")
     elif c == "assets":
         emit(args, svc.assets(args.media), lambda d: "\n".join(
             [f"{a['media']:<6} {a['file']:<48} " + " ".join(

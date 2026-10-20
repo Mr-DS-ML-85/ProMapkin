@@ -66,17 +66,22 @@ const adj=new Map();D.nodes.forEach(n=>adj.set(n,[]));E.forEach(e=>{adj.get(e.a)
 let view={x:0,y:0,k:1},sel=null,hover=null,query='',observedOnly=false,edgeType='',hops=1,frozen=false,ticks=0;
 let drag=null,dragNode=null,userMoved=false;
 const hiddenKinds=new Set(),hiddenGroups=new Set();
+const H=(D.hyper||[]).map(h=>({...h,nodes:h.members.map(m=>byId.get(m)).filter(Boolean)})).filter(h=>h.nodes.length>=2);
+const HYPER_COLOR={co_change:'#c2410c',flow:'#0f766e',pattern:'#7c3aed'};const shownHyper=new Set();let hyperSel=null;
 function css(v){return getComputedStyle(root).getPropertyValue(v).trim()}
 function color(n){return n.cat==='code'&&n.group>=0?commColors[n.group%commColors.length]:css('--'+n.cat)||'#888'}
 function visible(n){return !hiddenKinds.has(n.cat)&&!(n.group>=0&&hiddenGroups.has(n.group))}
 function edgeVisible(e){return visible(e.a)&&visible(e.b)&&(!observedOnly||e.cls==='observed')&&(!edgeType||e.type===edgeType)}
 // --- legend, filters, stats
+function hyperChips(){const kinds=[...new Set(H.map(h=>h.kind))];if(!kinds.length)return'';
+ return `<div class="k">Groups (hyperedges)</div><div class="row">${kinds.map(k=>`<span class="chip${shownHyper.has(k)?'':' off'}" data-hyper="${k}"><i style="background:${HYPER_COLOR[k]};opacity:.5;border-radius:3px"></i>${k.replace('_','-')} ${H.filter(h=>h.kind===k).length}</span>`).join('')}</div>`}
 const legend=document.getElementById('legend');
 function buildLegend(){const counts={};D.nodes.forEach(n=>counts[n.cat]=(counts[n.cat]||0)+1);
  const cats=CATS.filter(c=>counts[c]).map(c=>`<span class="chip${hiddenKinds.has(c)?' off':''}" data-cat="${c}"><i style="background:${css('--'+c)};${SHAPE[c]==='circle'?'border-radius:50%':SHAPE[c]==='diamond'?'transform:rotate(45deg) scale(.85)':SHAPE[c]==='triangle'?'clip-path:polygon(50% 0,100% 100%,0 100%)':SHAPE[c]==='pentagon'?'clip-path:polygon(50% 0,100% 38%,82% 100%,18% 100%,0 38%)':''}"></i>${c} ${counts[c]}</span>`).join('');
  const groups=D.groups.slice(0,12).map((g,i)=>`<span class="chip${hiddenGroups.has(i)?' off':''}" data-group="${i}"><i style="background:${commColors[i%commColors.length]};border-radius:50%"></i>${esc(g)}</span>`).join('');
- legend.innerHTML=`<div class="k">Kinds</div><div class="row">${cats}</div>${groups?`<div class="k">Code communities</div><div class="row">${groups}</div>`:''}<div class="k">— observed · ┄ inferred · ${STATS}${D.truncated?' · most connected shown':''}</div>`;
+ legend.innerHTML=`<div class="k">Kinds</div><div class="row">${cats}</div>${groups?`<div class="k">Code communities</div><div class="row">${groups}</div>`:''}${hyperChips()}<div class="k">— observed · ┄ inferred · ${STATS}${D.truncated?' · most connected shown':''}</div>`;
  legend.querySelectorAll('[data-cat]').forEach(el=>el.onclick=()=>{const c=el.dataset.cat;hiddenKinds.has(c)?hiddenKinds.delete(c):hiddenKinds.add(c);buildLegend()});
+ legend.querySelectorAll('[data-hyper]').forEach(el=>el.onclick=()=>{const k=el.dataset.hyper;shownHyper.has(k)?shownHyper.delete(k):shownHyper.add(k);buildLegend()});
  legend.querySelectorAll('[data-group]').forEach(el=>el.onclick=ev=>{const g=+el.dataset.group;if(ev.shiftKey){hiddenGroups.clear();D.groups.forEach((_,i)=>i!==g&&hiddenGroups.add(i))}else{hiddenGroups.has(g)?hiddenGroups.delete(g):hiddenGroups.add(g)}buildLegend()})}
 const et=document.getElementById('etype');[...new Set(E.map(e=>e.type))].sort().forEach(t=>{const o=document.createElement('option');o.value=t;o.textContent=`${t} (${E.filter(e=>e.type===t).length})`;et.appendChild(o)});
 const STATS=`${D.nodes.length} nodes · ${E.length} edges · ${D.groups.length} communities`;
@@ -98,7 +103,17 @@ function shape(n,x,y,r){cx.beginPath();const s=SHAPE[n.cat]||'circle';
  else if(s==='triangle'){cx.moveTo(x,y-r*1.2);cx.lineTo(x+r*1.1,y+r*.8);cx.lineTo(x-r*1.1,y+r*.8);cx.closePath()}
  else{for(let i=0;i<5;i++){const a=-Math.PI/2+i*2*Math.PI/5;cx[i?'lineTo':'moveTo'](x+Math.cos(a)*r*1.1,y+Math.sin(a)*r*1.1)}cx.closePath()}}
 function focusSet(){if(!sel)return null;const s=new Set([sel]);let front=[sel];for(let h=0;h<hops;h++){const next=[];for(const n of front)for(const e of adj.get(n)){if(!edgeVisible(e))continue;const o=e.a===n?e.b:e.a;if(!s.has(o)){s.add(o);next.push(o)}}front=next}return s}
-function draw(){const dpr=devicePixelRatio;cx.clearRect(0,0,cv.width,cv.height);const fs=focusSet(),muted=css('--muted'),fg=css('--fg');
+function hull(pts){if(pts.length<3)return pts;pts=[...pts].sort((a,b)=>a[0]-b[0]||a[1]-b[1]);const cr=(o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);
+ const lo=[],up=[];for(const p of pts){while(lo.length>=2&&cr(lo[lo.length-2],lo[lo.length-1],p)<=0)lo.pop();lo.push(p)}
+ for(const p of pts.slice().reverse()){while(up.length>=2&&cr(up[up.length-2],up[up.length-1],p)<=0)up.pop();up.push(p)}return lo.slice(0,-1).concat(up.slice(0,-1))}
+function drawHyper(){const dpr=devicePixelRatio,list=hyperSel?[hyperSel]:H.filter(h=>shownHyper.has(h.kind));
+ for(const h of list){const vis=h.nodes.filter(visible);if(vis.length<2)continue;const pad=14*dpr;
+  const pts=vis.flatMap(n=>{const[x,y]=S(n);return[[x-pad,y],[x+pad,y],[x,y-pad],[x,y+pad]]});const hp=hull(pts);
+  cx.globalAlpha=hyperSel?.22:.11;cx.fillStyle=HYPER_COLOR[h.kind]||'#888';cx.strokeStyle=HYPER_COLOR[h.kind]||'#888';cx.lineWidth=dpr;
+  cx.beginPath();hp.forEach((p,i)=>cx[i?'lineTo':'moveTo'](p[0],p[1]));cx.closePath();cx.fill();cx.globalAlpha=hyperSel?.7:.35;cx.stroke();
+  if(hyperSel||view.k>1.2){const c=hp.reduce((a,p)=>[a[0]+p[0]/hp.length,a[1]+p[1]/hp.length],[0,0]);cx.globalAlpha=.85;cx.fillStyle=HYPER_COLOR[h.kind];
+   cx.font=`${10.5*dpr}px system-ui`;cx.fillText(h.label.slice(0,60),c[0]-20*dpr,Math.min(...hp.map(p=>p[1]))-4*dpr)}}cx.globalAlpha=1}
+function draw(){const dpr=devicePixelRatio;cx.clearRect(0,0,cv.width,cv.height);drawHyper();const fs=hyperSel?new Set(hyperSel.nodes):focusSet(),muted=css('--muted'),fg=css('--fg');
  const q=query.toLowerCase();
  for(const e of E){if(!edgeVisible(e))continue;const on=fs?fs.has(e.a)&&fs.has(e.b):true;if(fs&&!on)continue;
   const[x1,y1]=S(e.a),[x2,y2]=S(e.b);const c=css('--'+(ETYPE_CAT[e.type]||'code'));
@@ -133,8 +148,10 @@ function select(n){sel=n;if(!n){return}const out=adj.get(n).filter(e=>e.a===n&&e
  info.innerHTML=`<h2>${esc(n.label)}</h2><div class="k">${esc(n.kind)} · <span class="badge ${n.ev&&['ast','static_resolved','runtime','manifest','lexical'].includes(n.ev)?'observed':'inferred'}">${esc(n.ev)}</span> · degree ${n.degree}</div>
  <div class="loc">${esc(n.loc)}</div>${n.group>=0?`<div class="k">community: ${esc(D.groups[n.group])}</div>`:''}${n.doc?`<div class="doc">${esc(n.doc)}</div>`:''}
  <div class="k" style="margin-top:6px"><button id="copy">Copy id</button></div>
+ ${H.some(h=>h.nodes.includes(n))?`<h3>Part of</h3><ul>${H.map((h,i)=>[h,i]).filter(([h])=>h.nodes.includes(n)).slice(0,12).map(([h,i])=>`<li data-hyper-i="${i}"><span class="et">${esc(h.kind.replace('_','-'))}</span>${esc(h.label)} <span class="badge">${h.nodes.length}</span></li>`).join('')}</ul>`:''}
  <h3>Outgoing · ${out.length}</h3><ul>${group(out,e=>e.b)||'<li class="k">none</li>'}</ul><h3>Incoming · ${inn.length}</h3><ul>${group(inn,e=>e.a)||'<li class="k">none</li>'}</ul>`;
- info.querySelectorAll('li[data-id]').forEach(l=>l.onclick=()=>{const t=byId.get(l.dataset.id);select(t);center(t)});
+ info.querySelectorAll('li[data-id]').forEach(l=>l.onclick=()=>{const t=byId.get(l.dataset.id);hyperSel=null;select(t);center(t)});
+ info.querySelectorAll('li[data-hyper-i]').forEach(l=>l.onclick=()=>{hyperSel=hyperSel===H[+l.dataset.hyperI]?null:H[+l.dataset.hyperI]});
  document.getElementById('copy').onclick=()=>navigator.clipboard&&navigator.clipboard.writeText(n.id)}
 // search with suggestions
 const qi=document.getElementById('q'),sugg=document.getElementById('sugg');let suggIdx=0,suggList=[];
@@ -146,7 +163,7 @@ function choose(i){const n=suggList[i];if(!n)return;hiddenKinds.delete(n.cat);if
 qi.oninput=suggest;qi.onkeydown=e=>{if(e.key==='ArrowDown'||e.key==='ArrowUp'){suggIdx=(suggIdx+(e.key==='ArrowDown'?1:suggList.length-1))%Math.max(1,suggList.length);
  sugg.querySelectorAll('li').forEach((l,i)=>l.classList.toggle('on',i===suggIdx));e.preventDefault()}else if(e.key==='Enter')choose(suggIdx);else if(e.key==='Escape'){qi.value='';suggest();qi.blur()}};
 qi.onblur=()=>setTimeout(()=>sugg.style.display='none',150);
-addEventListener('keydown',e=>{if(e.key==='/'&&document.activeElement!==qi){e.preventDefault();qi.focus()}else if(e.key==='Escape'){sel=null;query='';qi.value=''}});
+addEventListener('keydown',e=>{if(e.key==='/'&&document.activeElement!==qi){e.preventDefault();qi.focus()}else if(e.key==='Escape'){sel=null;hyperSel=null;query='';qi.value=''}});
 document.getElementById('observed').onchange=e=>{observedOnly=e.target.checked;if(sel)select(sel)};
 et.onchange=e=>{edgeType=e.target.value;if(sel)select(sel)};document.getElementById('hops').onchange=e=>hops=+e.target.value;
 document.getElementById('fit').onclick=()=>{userMoved=false;fit()};

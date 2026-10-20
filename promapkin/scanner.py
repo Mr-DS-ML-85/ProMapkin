@@ -112,7 +112,16 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
         # other promapkin processes (MCP server, a second terminal) must not wait on them.
         parsed = _batch_parse(ws, [p for p in changed if contents[p][1] in ("javascript", "typescript")], errors)
         extracted: dict[str, tuple[str, bool, Facts | None, str | None]] = {}
+        todo = [p for p in changed if p not in parsed]
+        workers = _scan_workers(ws, len(todo))
+        if workers > 1:
+            # Extraction is pure (no index access, no LLM in this mode): spread it over processes.
+            extracted.update(_extract_parallel(ws, [(p, contents[p][1], contents[p][2]) for p in todo], workers,
+                                               errors))
+            timer.mark(f"parse ({workers} processes)")
         for p in changed:
+            if p in extracted:
+                continue
             if contents[p][1] in ASSET_LANGUAGES:
                 extracted[p] = ("", False, *_extract_asset(ws, p, contents[p][1], contents[p][2], errors))
                 continue
@@ -283,6 +292,65 @@ def _extract_one(ws: Workspace, path: str, lang: str, text: str, errors: list[st
     return facts, parser
 
 
+PARALLEL_MIN_FILES = 200
+
+
+def _scan_workers(ws: Workspace, n_files: int) -> int:
+    if getattr(ws, "llm", None) is not None or n_files < PARALLEL_MIN_FILES:
+        return 1
+    env = os.environ.get("PROMAPKIN_WORKERS")
+    want = int(env) if env and env.isdigit() else ws.config.scan_workers
+    if want <= 0:
+        want = min(8, os.cpu_count() or 1)
+    return max(1, min(want, n_files // max(1, PARALLEL_MIN_FILES // 4)))
+
+
+def _extract_parallel(ws: Workspace, jobs: list[tuple[str, str, int]], workers: int, errors: list[str]
+                      ) -> dict[str, tuple[str, bool, Facts | None, str | None]]:
+    from concurrent.futures import ProcessPoolExecutor
+    import multiprocessing
+
+    out: dict[str, tuple[str, bool, Facts | None, str | None]] = {}
+    chunks = [jobs[i::workers * 4] for i in range(workers * 4)]
+    ctx = multiprocessing.get_context("spawn" if os.name == "nt" else "fork")
+    try:
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
+            for results, errs in pool.map(_extract_chunk, [(str(ws.root), c) for c in chunks if c]):
+                out.update(results)
+                errors.extend(errs)
+    except (OSError, RuntimeError) as exc:   # no fork/spawn available: extract in this process instead
+        errors.append(f"parallel extraction unavailable ({exc}); extracted sequentially")
+        return {}
+    return out
+
+
+def _extract_chunk(arg: tuple[str, list[tuple[str, str, int]]]
+                   ) -> tuple[dict[str, tuple[str, bool, Facts | None, str | None]], list[str]]:
+    root, jobs = arg
+    from promapkin.config import Config
+    from types import SimpleNamespace
+    ws = SimpleNamespace(root=Path(root), llm=None, config=Config.load(Path(root) / ".promapkin" / "config.json"))
+    errors: list[str] = []
+    results = {}
+    for rel, lang, size in jobs:
+        if lang in ASSET_LANGUAGES:
+            results[rel] = ("", False, *_extract_asset(ws, rel, lang, size, errors))  # type: ignore[arg-type]
+            continue
+        try:
+            text = (ws.root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            errors.append(f"{rel}: {exc}")
+            continue
+        facts, parser = _extract_one(ws, rel, lang, text, errors)  # type: ignore[arg-type]
+        if facts is not None and lang not in NON_CODE:
+            try:
+                data_links.annotate(facts, text, lang)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{rel}: data links skipped ({type(exc).__name__}: {str(exc)[:120]})")
+        results[rel] = (text, is_generated(rel, text), facts, parser)
+    return results, errors
+
+
 def _asset_fingerprint(path: Path, lang: str) -> tuple[str, str, int] | None:
     """(sha, language, size) for a binary asset. Video is never read whole: its identity is size, mtime and header."""
     from promapkin.extract.assets_ext import MAX_ASSET_BYTES
@@ -348,6 +416,11 @@ def _candidate_files(ws: Workspace) -> list[str]:
         files = [f for f in files if any(fnmatch.fnmatch(f, pat) for pat in inc)]
     if exc:
         files = [f for f in files if not any(fnmatch.fnmatch(f, pat) for pat in exc)]
+    sources = ws.dir / "sources"          # papers, transcripts and pages added with `promapkin add`
+    if sources.is_dir():
+        have = set(files)
+        files += sorted(p.relative_to(ws.root).as_posix() for p in sources.rglob("*")
+                        if p.is_file() and p.name != "index.json" and p.relative_to(ws.root).as_posix() not in have)
     return files
 
 

@@ -107,6 +107,41 @@ TOOLS: list[Tool] = [
     _t("run_specialist", f"Run one specialist agent ({', '.join(SECTIONS)}) over its bounded scope and return its "
        "structured section.", obj({"specialist": {"type": "string", "enum": SECTIONS}, "goal": S}, ["specialist"]),
        lambda s, a: s.run_specialist(a["specialist"], a.get("goal")), False),
+    _t("get_pull_requests", "Open pull requests (GitHub via gh CLI or GITHUB_TOKEN; or unmerged local branches with "
+       "local=true): CI state, review state, worktree, risk, changed symbols, communities, tests to run, and "
+       "merge-order conflicts between PRs. number= deep-dives one PR; triage=true orders the review queue.",
+       obj({"number": S, "local": B, "base": S, "triage": B, "limit": I}),
+       lambda s, a: __import__("promapkin.prs", fromlist=["dashboard"]).dashboard(
+           s.ws, "local" if a.get("local") else "auto", a.get("limit", 30), a.get("number"), a.get("base"),
+           a.get("triage", False), getattr(s.ws, "llm", None))),
+    _t("add_source", "Add outside knowledge to the graph: an arXiv paper (abstract + PDF), a YouTube video "
+       "(transcript), a public web page, or a file path. It is indexed as documentation linked to the code it "
+       "mentions. Public http(s) hosts only.", obj({"target": S, "title": S}, ["target"]),
+       lambda s, a: {**__import__("promapkin.sources", fromlist=["add"]).add(s.ws, a["target"], title=a.get("title")),
+                     "scan": {k: v for k, v in s.scan().items() if k in ("changed", "files")}}, False),
+    _t("list_sources", "Papers, videos, pages and files added with add_source, with their provenance.", obj({}),
+       lambda s, a: {"sources": __import__("promapkin.sources", fromlist=["list_sources"]).list_sources(s.ws)}),
+    _t("get_hyperedges", "Relations among more than two nodes: modules that change together in git history "
+       "(co_change), entry-point-to-sink data flows (flow), design-pattern role groups (pattern) and communities.",
+       obj({"kinds": SL}), lambda s, a: {"hyperedges": __import__("promapkin.insights", fromlist=["hyperedges"])
+                                         .hyperedges(s.store, s.ws.root, kinds=tuple(a.get("kinds") or
+                                                     ("co_change", "flow", "pattern", "community")))}),
+    _t("find_duplicate_logic", "Look-alike code in separate communities with no call, import or inheritance between "
+       "them: candidates for duplicated logic or a missing shared abstraction (similarity is inferred).",
+       obj({"limit": I}), lambda s, a: {"duplicates": __import__("promapkin.insights", fromlist=["x"])
+                                        .semantic_surprises(s.store, None, a.get("limit", 20))}),
+    _t("render_callflow", "Mermaid call-flow diagram from an entry point (symbol, endpoint or module) down to data "
+       "sinks; without entry, one per endpoint and executable module.", obj({"entry": S, "depth": I}),
+       lambda s, a: {"flows": __import__("promapkin.exports", fromlist=["callflow"]).callflow(
+           s.ws, a.get("entry"), a.get("depth", 4))}),
+    _t("export_graph", "Write the whole graph (nodes, edges, hyperedges, evidence, confidence) to "
+       ".promapkin/exports/graph.<format> as json or graphml.",
+       obj({"format": {"type": "string", "enum": ["json", "graphml"]}}),
+       lambda s, a: __import__("promapkin.exports", fromlist=["write_export"]).write_export(
+           s.ws, s.ws.dir / "exports" / f"graph.{a.get('format', 'json')}", a.get("format", "json")), False),
+    _t("export_wiki", "Write an agent-crawlable Markdown wiki (index, subsystems, modules, endpoints, data model, "
+       "infrastructure, decisions) to .promapkin/wiki.", obj({}),
+       lambda s, a: __import__("promapkin.exports", fromlist=["wiki"]).wiki(s.ws), False),
     _t("get_infrastructure", "Deployables (containers, Compose services, Kubernetes workloads) with the code they "
        "run, what routes to them and the config they set; ingress; Terraform resources by category with their "
        "dependencies; CI pipelines; and the configuration surface (keys read by code but never declared, and the "

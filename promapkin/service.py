@@ -338,7 +338,7 @@ class Service:
         from promapkin import insights, ml
         out = safe_path(self.ws.root, path) if path else self.ws.blueprint_dir / "graph.html"
         r = insights.export_html(self.store, out, ml.runtime(self.ws), max_nodes=max_nodes,
-                                 title=f"{self.ws.root.name} · Promapkin graph")
+                                 title=f"{self.ws.root.name} · Promapkin graph", root=self.ws.root)
         r["path"] = str(Path(r["path"]).relative_to(self.ws.root))
         return r
 

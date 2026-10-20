@@ -114,8 +114,8 @@ def surprises(store: Store, rt: Any = None, limit: int = 20) -> dict[str, Any]:
 
 # ------------------------------------------------------------------------------------- HTML explorer
 
-def export_html(store: Store, out: Path, rt: Any = None, max_nodes: int = 1500, title: str = "Promapkin graph"
-                ) -> dict[str, Any]:
+def export_html(store: Store, out: Path, rt: Any = None, max_nodes: int = 1500, title: str = "Promapkin graph",
+                root: Any = None) -> dict[str, Any]:
     comms = communities(store, rt)
     member = {m: i for i, c in enumerate(comms) for m in c["modules"]}
     marks = ",".join("?" * len(HTML_EDGES))
@@ -152,7 +152,12 @@ def export_html(store: Store, out: Path, rt: Any = None, max_nodes: int = 1500, 
             seen.add(key)
             data_edges.append({"s": e["src"], "t": e["dst"], "type": e["type"], "ev": e["evidence"],
                                "cls": ev.classify(e["evidence"]), "w": round(float(e["confidence"] or 1), 2)})
-    payload = {"nodes": data_nodes, "edges": data_edges,
+    hyper = []
+    for h in hyperedges(store, root, rt, kinds=("co_change", "flow", "pattern")):
+        members = [m for m in h["members"] if m in keep_set]
+        if len(members) >= 2:
+            hyper.append({"kind": h["kind"], "label": h["label"], "members": members, "weight": h.get("weight")})
+    payload = {"nodes": data_nodes, "edges": data_edges, "hyper": hyper[:200],
                "groups": [c["component"] for c in comms], "title": title,
                "truncated": len([n for n in nodes if degree[n]]) > len(data_nodes)}
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -163,3 +168,117 @@ def export_html(store: Store, out: Path, rt: Any = None, max_nodes: int = 1500, 
 
 
 HTML_TEMPLATE = (Path(__file__).parent / "graph_template.html").read_text()
+
+
+def semantic_surprises(store: Store, rt: Any = None, limit: int = 20) -> list[dict[str, Any]]:
+    """Code that looks alike (`similar_to`) across community boundaries with no structural link between them:
+    candidates for duplicated logic or a missing shared abstraction. Inferred evidence, ranked by similarity."""
+    comms = communities(store, rt)
+    member = {m: i for i, c in enumerate(comms) for m in c["modules"]}
+    cache: dict[str, str | None] = {}
+    marks = ",".join("?" * len(CODE_EDGES))
+    linked = {(a, b) for a, b in store.conn.execute(f"SELECT src, dst FROM edges WHERE type IN ({marks})",
+                                                     CODE_EDGES)}
+    rows = []
+    for e in store.edges(types=["similar_to"]):
+        a, b = e["src"], e["dst"]
+        if (a, b) in linked or (b, a) in linked:
+            continue
+        ma, mb = _module_of(store, a, cache), _module_of(store, b, cache)
+        if not ma or not mb or ma == mb:
+            continue
+        ca, cb = member.get(ma), member.get(mb)
+        if ca is None or cb is None or ca == cb:
+            continue
+        na, nb = store.node(a), store.node(b)
+        if not na or not nb or na["attrs"].get("test") or nb["attrs"].get("test") or \
+                na["kind"] == "test" or nb["kind"] == "test":
+            continue
+        rows.append({"a": a, "b": b, "similarity": round(float(e["confidence"] or 0), 3), "evidence": e["evidence"],
+                     "communities": [comms[ca]["component"], comms[cb]["component"]],
+                     "locations": [f"{na['file']}:{na['line_start']}", f"{nb['file']}:{nb['line_start']}"],
+                     "why": "similar code in separate communities with no call, import or inheritance between them"})
+    rows.sort(key=lambda r: -r["similarity"])
+    return rows[:limit]
+
+
+# ====================================================================== hyperedges
+def hyperedges(store: Store, root: Any = None, rt: Any = None, kinds: tuple[str, ...] = ("co_change", "flow",
+                                                                                         "pattern", "community"),
+               max_commits: int = 600, min_support: int = 3) -> list[dict[str, Any]]:
+    """Relations among more than two nodes, which pairwise edges flatten:
+    - co_change: modules that git history shows changing together (exact sets seen in >= min_support commits);
+    - flow: an entry point's whole path to a data sink;
+    - pattern: a design pattern and the classes playing its roles;
+    - community: modules grouped by imports and meaning."""
+    out: list[dict[str, Any]] = []
+    if "co_change" in kinds and root is not None:
+        out += _co_change(store, root, max_commits, min_support)
+    if "flow" in kinds:
+        out += _flows(store)
+    if "pattern" in kinds:
+        by_pattern: dict[str, list[str]] = defaultdict(list)
+        for e in store.edges(types=["implements_pattern"]):
+            by_pattern[e["dst"]].append(e["src"])
+        for pid, members in by_pattern.items():
+            n = store.node(pid)
+            if n and len(set(members)) >= 2:
+                out.append({"id": f"hyper:pattern:{pid}", "kind": "pattern", "label": n["name"],
+                            "members": sorted(set(members)), "weight": round(float(n["confidence"] or 0.5), 2),
+                            "evidence": n["evidence"]})
+    if "community" in kinds:
+        for c in communities(store, rt):
+            if len(c["modules"]) >= 2:
+                out.append({"id": f"hyper:community:{c['component']}", "kind": "community", "label": c["component"],
+                            "members": c["modules"], "weight": c.get("cohesion"), "evidence": c.get("method")})
+    return out
+
+
+def _co_change(store: Store, root: Any, max_commits: int, min_support: int) -> list[dict[str, Any]]:
+    import subprocess
+    try:
+        log = subprocess.run(["git", "-C", str(root), "log", f"-n{max_commits}", "--no-merges", "--name-only",
+                              "--format=@@%H"], capture_output=True, text=True, timeout=60, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    module_of_file = {f: m for m, f in store.conn.execute(
+        "SELECT id, file FROM nodes WHERE kind='module' AND file IS NOT NULL")}
+    tests = {n["id"] for n in store.nodes("module") if n["attrs"].get("test")}
+    sets: Counter[frozenset[str]] = Counter()
+    per_module: Counter[str] = Counter()
+    for chunk in log.split("@@")[1:]:
+        files = [ln.strip() for ln in chunk.splitlines()[1:] if ln.strip()]
+        mods = frozenset(module_of_file[f] for f in files if f in module_of_file and module_of_file[f] not in tests)
+        for m in mods:
+            per_module[m] += 1
+        if 2 <= len(mods) <= 6:
+            sets[mods] += 1
+    out = []
+    for mods, n in sets.most_common(60):
+        if n < min_support:
+            break
+        confidence = round(n / max(1, min(per_module[m] for m in mods)), 2)
+        out.append({"id": "hyper:co_change:" + "+".join(sorted(m.split(":", 1)[-1] for m in mods))[:200],
+                    "kind": "co_change", "label": f"changed together in {n} commits", "members": sorted(mods),
+                    "weight": confidence, "support": n, "evidence": "git_history"})
+    return out
+
+
+def _flows(store: Store, limit: int = 40) -> list[dict[str, Any]]:
+    from promapkin.graph import Graph
+    g = Graph(store)
+    starts = [n["id"] for n in store.nodes("endpoint")][:limit]
+    out = []
+    for sid in starts:
+        try:
+            flows = g.dataflow(sid, max_depth=6, limit=3).get("flows", [])
+        except LookupError:
+            continue
+        for f in flows:
+            members = [sid] + [s["target"] for s in f.get("steps", [])]
+            members = list(dict.fromkeys(members))
+            if len(members) >= 3:
+                out.append({"id": f"hyper:flow:{sid}->{members[-1]}", "kind": "flow",
+                            "label": f"{sid.split(':', 1)[-1]} → {members[-1].split(':', 1)[-1]}", "members": members,
+                            "weight": f.get("trust"), "evidence": f.get("basis") or "static"})
+    return out[:limit]

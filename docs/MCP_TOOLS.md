@@ -4,7 +4,7 @@ Generated from `promapkin/mcp_server.py` by `scripts/gen_mcp_docs.py` (`promapki
 
 R = read-only, W = writes shared knowledge or artifacts (validated, append-only, provenance recorded).
 
-56 tools.
+64 tools.
 
 | Tool | | Arguments | Description |
 |---|---|---|---|
@@ -22,6 +22,14 @@ R = read-only, W = writes shared knowledge or artifacts (validated, append-only,
 | `get_risk_register` | R | — | Risky symbols (fan-in, complexity, untested, writes, churn), structural risks, open TODO/warning notes. |
 | `plan_implementation` | W | **goal** | Design engine: dependency-aware implementation roadmap for a goal with prerequisites, affected components, constraints, test plan, migration steps and risk assessment. |
 | `run_specialist` | W | **specialist**, goal | Run one specialist agent (reconnaissance, architecture, dataflow, api, patterns, decisions, risks, verification, roadmap) over its bounded scope and return its structured section. |
+| `get_pull_requests` | R | number, local, base, triage, limit | Open pull requests (GitHub via gh CLI or GITHUB_TOKEN; or unmerged local branches with local=true): CI state, review state, worktree, risk, changed symbols, communities, tests to run, and merge-order conflicts between PRs. number= deep-dives one PR; triage=true orders the review queue. |
+| `add_source` | W | **target**, title | Add outside knowledge to the graph: an arXiv paper (abstract + PDF), a YouTube video (transcript), a public web page, or a file path. It is indexed as documentation linked to the code it mentions. Public http(s) hosts only. |
+| `list_sources` | R | — | Papers, videos, pages and files added with add_source, with their provenance. |
+| `get_hyperedges` | R | kinds | Relations among more than two nodes: modules that change together in git history (co_change), entry-point-to-sink data flows (flow), design-pattern role groups (pattern) and communities. |
+| `find_duplicate_logic` | R | limit | Look-alike code in separate communities with no call, import or inheritance between them: candidates for duplicated logic or a missing shared abstraction (similarity is inferred). |
+| `render_callflow` | R | entry, depth | Mermaid call-flow diagram from an entry point (symbol, endpoint or module) down to data sinks; without entry, one per endpoint and executable module. |
+| `export_graph` | W | format | Write the whole graph (nodes, edges, hyperedges, evidence, confidence) to .promapkin/exports/graph.<format> as json or graphml. |
+| `export_wiki` | W | — | Write an agent-crawlable Markdown wiki (index, subsystems, modules, endpoints, data model, infrastructure, decisions) to .promapkin/wiki. |
 | `get_infrastructure` | R | — | Deployables (containers, Compose services, Kubernetes workloads) with the code they run, what routes to them and the config they set; ingress; Terraform resources by category with their dependencies; CI pipelines; and the configuration surface (keys read by code but never declared, and the reverse). |
 | `list_assets` | R | media, limit | PDFs, Word/PowerPoint files, images and videos in the repository: pages, dimensions, duration, extracted text availability, image descriptions (--llm), which docs reference them and which code they mention. Their text is searchable with search_graph. |
 | `get_data_model` | R | — | Tables and views (columns, keys, foreign keys), ORM classes mapped to them, the symbols that read and write each table, migrations, GraphQL/protobuf/OpenAPI schema types, endpoints by protocol, and API-spec coverage (spec operations without code, code endpoints missing from the spec). |

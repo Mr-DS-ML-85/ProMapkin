@@ -1,5 +1,67 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`promapkin prs`: pull-request dashboard.**
+  - Shows open PRs from GitHub (through `gh`, or `GITHUB_TOKEN`/`GH_TOKEN`, with `GH_HOST` for Enterprise), or
+    local branches with `--local`.
+  - For each PR: CI state, review state, the worktree that has the branch checked out, and the changed modules,
+    communities and symbols.
+  - Also: blast radius, tests to run, a risk score, and merge-conflict risk between PRs from overlapping files,
+    symbols, modules and communities (`--conflicts`).
+  - `--triage` ranks the PRs (deterministic, or with an LLM under `--llm`).
+  - MCP tool: `get_pull_requests`.
+- **Automatic re-indexing.**
+  - `promapkin hook install|uninstall|status` adds a marked block to `post-commit`, `post-checkout`,
+    `post-merge` and `post-rewrite`.
+    - The block runs an incremental scan in the background; `--blueprint` runs `sync` instead.
+    - Existing hooks are kept, `core.hooksPath` is honoured, and `PROMAPKIN_HOOKS=0` turns the hooks off.
+  - `promapkin watch` (or `scan --watch`) polls the tree and re-indexes once changes settle. It needs no
+    dependencies.
+- **`promapkin add <url|path>`** brings outside material into the index:
+  - arXiv papers: abstract, metadata and PDF text;
+  - YouTube videos: captions through `yt-dlp`, or a transcript through `faster-whisper` when installed;
+  - web pages: converted to Markdown;
+  - local files.
+
+  Sources are stored in `.promapkin/sources/` and linked to the code they mention. Only http(s) is fetched, and
+  private or loopback hosts are refused unless you pass `--allow-private`. Manage them with
+  `promapkin sources list|remove`; MCP tools `add_source` and `list_sources`.
+- **`promapkin graph export --format json|graphml`** and **`promapkin graph merge`**.
+  - `merge` combines several repositories (or exported graphs) into one index with namespaced ids.
+  - It adds cross-repository links: a client call → the endpoint that serves it (`provided_by`), an OpenAPI
+    spec → its implementation (`specifies`), shared tables and protobuf messages (`same_as`), and an
+    infrastructure repo → the code it deploys (`deploys`).
+  - MCP tool: `export_graph`.
+- **`promapkin wiki`** (or `scan --wiki`) writes a linked Markdown wiki:
+  - an index;
+  - one page per subsystem and per module;
+  - endpoints, data, infrastructure and decisions pages.
+
+  MCP tool: `export_wiki`.
+- **`promapkin graph callflow [entry]`** writes Mermaid call-flow diagrams grouped by file, as an HTML page plus
+  `.mmd` sources. Dashed arrows are inferred calls. MCP tool: `render_callflow`.
+- **Hyperedges:** relationships among more than two nodes.
+  - Kinds: files that change together in git history (`co_change`), entry point → sink flows (`flow`), the
+    participants of a design pattern (`pattern`), and communities.
+  - `graph hyperedges` lists them; `graph.html` shades them as hulls you can toggle; MCP tool `get_hyperedges`.
+- **`graph surprises --semantic`:** near-duplicate logic across communities that has no structural link
+  (`similar_to` from embeddings). MCP tool: `find_duplicate_logic`.
+
+### Changed
+- **Faster scans on large repositories.**
+  - Parsing and extraction run across processes when a scan touches 200 or more files and no LLM is attached.
+  - Set the number of workers with `scan_workers` in the config or `PROMAPKIN_WORKERS`.
+  - On fastapi, the parse phase drops from 10.7 s to 2.9 s with 4 processes.
+
+### Fixed
+- **Python 3.10 support:**
+  - a built-in TOML reader replaces `tomllib` where it is missing, so Cargo workspaces and `pyproject.toml`
+    resolve again;
+  - runtime tracing attributes calls made inside comprehensions (which run in their own frames before 3.12) to
+    the enclosing function.
+
 ## 0.3.0
 
 ### Added

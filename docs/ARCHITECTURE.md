@@ -148,6 +148,39 @@ skills and commands.
 - Text files get marked blocks, and owned files carry a marker so edited copies are left alone.
 - Every change is recorded in `.promapkin/installs.json`, and `uninstall` replays it in reverse.
 
+## Workflow modules
+
+- **`prs.py`: pull-request dashboard.**
+  - Sources: GitHub REST through `gh`, `GITHUB_TOKEN`/`GH_TOKEN` or `GH_HOST`, or local branches against the
+    default branch.
+  - Changed hunks are mapped to the symbols whose line ranges they cover, then to modules and communities.
+  - `impact()` gives the blast radius and the tests to run.
+  - Conflict risk weights shared files, then shared symbols, then shared modules and communities.
+  - `git worktree list --porcelain` maps branches to checkouts.
+- **`autoupdate.py`: keeping the index fresh.**
+  - Git hook blocks between `# >>> promapkin` and `# <<< promapkin` run a detached background scan.
+  - The polling watcher compares `(mtime, size)` of the scanner's candidate files and debounces before an
+    incremental scan.
+- **`sources.py`: `promapkin add`.**
+  - Each source type has a fetcher; output lands as Markdown or text under `.promapkin/sources/`, which the
+    scanner indexes as documents.
+  - The SSRF guard resolves the host and refuses private, loopback, link-local and reserved addresses.
+- **`exports.py`: graph and documentation export.**
+  - JSON and GraphML export.
+  - Multi-repo merge: ids become `namespace::id` and cross-repo links are derived from endpoints, specs,
+    tables, messages and images.
+  - The Markdown wiki.
+  - Mermaid call-flow diagrams.
+- **`insights.hyperedges`** builds n-ary groups:
+  - co-change sets mined from `git log`, with support ≥ 3 commits;
+  - data-flow paths;
+  - pattern participants;
+  - communities.
+
+  `semantic_surprises` uses embedding `similar_to` edges between communities that have no structural edge.
+- **Parallel extraction.** `scanner._extract_parallel` forks worker processes for scans of ≥ 200 files when no
+  LLM is attached. Extraction is pure, so the results are identical to a sequential scan; a test checks this.
+
 ## Known limitations
 
 - Tree-sitter and TypeScript extraction are optional installs; without them the lexical fallback is used (weighted

@@ -102,7 +102,19 @@ promapkin graph html                                  # self-contained interacti
 promapkin graph infra                                 # deployables → code they run, routing, cloud resources, config
 promapkin graph schema                                # tables, keys, ORM classes, who reads/writes, API spec coverage
 promapkin graph assets [--media pdf|office|image|video]
+promapkin graph hyperedges [--kind co_change|flow|pattern|community]   # n-ary groups, shaded in graph.html
+promapkin graph surprises --semantic                  # near-duplicate logic with no structural link
+promapkin graph callflow [entry] [--depth 3]          # Mermaid call-flow HTML, grouped by file
+promapkin graph export --format json|graphml          # the whole graph, for other tools
+promapkin graph merge --out combined ../api ../web    # one graph across repos, with cross-repo links
 promapkin graph deps | node | neighbors | similar | source | diagram | map | relate | finding
+
+promapkin prs [--local] [--conflicts] [--triage] [N]  # PR dashboard: CI, reviews, worktrees, blast radius, overlap
+promapkin hook install [--blueprint] | uninstall | status   # re-index in the background on commit/checkout/merge
+promapkin watch                                       # or `scan --watch`: re-index when files change
+promapkin wiki                                        # or `scan --wiki`: linked Markdown wiki
+promapkin add https://arxiv.org/abs/… | https://youtu.be/… | <url> | <path>   # papers, talks, pages, files
+promapkin sources list | remove <ref>
 
 promapkin context build "optimize vector search" --budget 3000
 promapkin handoff create --task ... --finding "claim|path:line|verified" --constraint ... --next ...
@@ -195,12 +207,14 @@ promapkin mcp config                                  # paste into your agent's 
 claude mcp add promapkin -- python -m promapkin --root /path/to/repo mcp serve
 ```
 
-There are 56 tools. They cover:
+There are 64 tools. They cover:
 - **Index:** status, session brief, scan, sync, verify, overview, toolchain.
 - **Design engine:** blueprint generation and sections, architecture, patterns, decisions, risks, implementation
   plans, specialist runs, diagrams.
 - **Graph read:** search, node, neighbours, structured query, trace, data flow, dependencies, impact, source,
-  similar, hubs, communities, surprising connections, HTML export.
+  similar, hubs, communities, surprising connections, hyperedges, duplicate logic, call-flow diagrams, HTML,
+  JSON/GraphML and wiki export.
+- **Workflow:** pull-request dashboard with conflict risk; adding papers, videos, pages and files as sources.
 - **Infrastructure and data:** deployables and routing, cloud resources, config surface, data model, API-spec
   coverage, assets.
 - **Graph write**, for agents that build knowledge: findings, nodes, relationships, annotations, supersede, maps.
@@ -267,6 +281,29 @@ layers, design patterns, resource calls, doc intent and comment intent. Graph ML
 
 Small neural embedding models (fastembed, sentence-transformers) are downloaded only with consent. Otherwise a
 built-in pure-Python model is used. `ml_backend: heuristic` switches everything to rules with static confidence.
+
+## Pull requests, sources and staying current
+
+- **`promapkin prs`** lists open PRs, or local branches with `--local`.
+  - Per PR: CI and review state, the worktree each branch is checked out in, and the modules, communities and
+    symbols it changes.
+  - Also: the blast radius, the tests to run and a risk score.
+  - `--conflicts` ranks pairs of PRs that are likely to collide: they touch the same files or symbols, or the
+    same modules or communities.
+  - `--triage` suggests a review order.
+  - Reads GitHub through `gh` or `GITHUB_TOKEN`.
+- **`promapkin hook install`** re-indexes in the background after every commit, checkout, merge and rebase.
+  - Existing hooks are preserved, and the block is removed cleanly by `hook uninstall`.
+  - `PROMAPKIN_HOOKS=0` skips it for a single command.
+- **`promapkin watch`** does the same for uncommitted edits.
+- **`promapkin add`** indexes a paper, a talk or a page next to the code, so `graph query` and `context build`
+  can cite it:
+  - arXiv: abstract and PDF text;
+  - YouTube: captions, or a transcript with `faster-whisper`;
+  - web pages: as Markdown;
+  - local files.
+- **`promapkin graph merge`** joins several repositories into one graph and links them: client call →
+  endpoint, OpenAPI spec → implementation, shared tables and messages, infrastructure → deployed code.
 
 ## Handoffs
 

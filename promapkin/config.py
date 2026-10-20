@@ -46,6 +46,7 @@ class Config:
     llm_fallbacks: bool = True        # Anthropic server-side refusal fallback (first-party API only)
     llm_images: bool = True           # --llm: let a vision model describe repository images (diagrams, screenshots)
     db_busy_timeout: float = 30.0     # seconds to wait for another process's write transaction
+    scan_workers: int = 0             # processes for extraction on large scans; 0 = auto (cores, at most 8)
     layers: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
