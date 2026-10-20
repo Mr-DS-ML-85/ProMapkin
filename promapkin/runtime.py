@@ -38,6 +38,7 @@ def _promapkin_install():
     skip = ("site-packages", "dist-packages", os.sep + ".venv" + os.sep, os.sep + "venv" + os.sep,
             os.sep + ".promapkin" + os.sep)
     edges, tests, inside_cache = {}, {}, {}
+    ANON = {"<listcomp>", "<dictcomp>", "<setcomp>", "<genexpr>", "<lambda>"}
     state = threading.local()
 
     def inside(fn):
@@ -67,6 +68,8 @@ def _promapkin_install():
         # Only real function frames (CO_OPTIMIZED): skips module import and class-body execution.
         if event != "call" or not (code.co_flags & 0x1) or not inside(code.co_filename):
             return
+        if code.co_name in ANON:   # comprehensions (own frames before 3.12), generators, lambdas
+            return
         k = key(code)
         name = code.co_name
         base = os.path.basename(code.co_filename)
@@ -76,9 +79,10 @@ def _promapkin_install():
             state.test_frame = frame
         caller = frame.f_back
         hops = 0
-        while caller is not None and not inside(caller.f_code.co_filename):
+        while caller is not None and (not inside(caller.f_code.co_filename) or caller.f_code.co_name in ANON):
+            if caller.f_code.co_name not in ANON:
+                hops += 1
             caller = caller.f_back
-            hops += 1
         if caller is not None:
             e = (key(caller.f_code), k, hops > 0)
             edges[e] = edges.get(e, 0) + 1

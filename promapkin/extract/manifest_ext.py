@@ -12,7 +12,7 @@ from promapkin.extract import Facts
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.10
-    tomllib = None  # type: ignore[assignment]
+    from promapkin.extract import tomlish as tomllib  # type: ignore[no-redef]
 
 REQ_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(\[[^\]]*\])?\s*([<>=!~^][^;#]*)?")
 
