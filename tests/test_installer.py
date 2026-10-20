@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from tests.helpers import RepoTestCase
@@ -152,6 +153,16 @@ class BriefTest(RepoTestCase):
         self.assertIn("Open handoff", text)
         self.assertIn("no new dependencies", text)
         self.assertLessEqual(len(brief(self.ws, max_chars=300)), 300)
+
+    def test_brief_with_layer_violations_after_blueprint(self):
+        # Regression: the overview reports layer_violations as a count; brief called len() on it.
+        from promapkin.brief import brief
+        from promapkin.service import Service
+        svc = Service(self.ws)
+        svc.generate_blueprint()
+        with unittest.mock.patch.object(Service, "overview", lambda _s: {"repository": "r", "layer_violations": 3}):
+            self.assertIn("Layer violations recorded: 3", brief(self.ws))
+        self.assertIn("Promapkin index of", brief(self.ws))
 
 
 if __name__ == "__main__":

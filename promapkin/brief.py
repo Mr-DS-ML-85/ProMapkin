@@ -63,8 +63,10 @@ def brief(ws: Workspace, sync: bool = False, max_chars: int = 4000) -> str:
     if hubs:
         out.append("Most depended-on symbols: " + ", ".join(
             f"{h['id'].rsplit(':', 1)[-1]} ({h['fan_in']} inbound)" for h in hubs))
-    if ov.get("layer_violations"):
-        out.append(f"Layer violations recorded: {len(ov['layer_violations'])}")
+    violations = ov.get("layer_violations")   # a count in the overview, a list in the architecture section
+    count = violations if isinstance(violations, int) else len(violations or [])
+    if count:
+        out.append(f"Layer violations recorded: {count}")
     open_handoffs = [h for h in svc.handoffs().list() if h.get("status") in OPEN_STATUSES][:3]
     for h in open_handoffs:
         out.append(f"Open handoff {h['id']}: {str(h.get('task', ''))[:140]} (next: {str(h.get('next_action', ''))[:120]})")
