@@ -1,0 +1,507 @@
+{
+  "tasks": 14,
+  "task_source": "spec",
+  "budget": 2000,
+  "repository_tokens": 682872,
+  "setup_overhead": {
+    "last_scan_seconds": 8.131,
+    "files_indexed": 482,
+    "index_bytes": 68554752
+  },
+  "results": {
+    "configured": {
+      "evaluated": 14,
+      "recall@5": 0.5,
+      "recall@10": 0.643,
+      "mrr": 0.344,
+      "context_hit_rate": 0.714,
+      "mean_context_tokens": 1950.8,
+      "mean_naive_exploration_tokens": 305809.2,
+      "token_reduction_vs_naive": 0.994,
+      "token_reduction_vs_whole_repo": 0.997,
+      "mean_search_ms": 72.64,
+      "mean_context_ms": 99.46,
+      "mode": "hybrid",
+      "rows": [
+        {
+          "query": "parse raw command line words into matched arguments",
+          "expected": [
+            "clap_builder/src/parser/parser.rs",
+            "clap_lex/src/lib.rs"
+          ],
+          "rank": 7,
+          "recall@5": 0,
+          "recall@10": 1,
+          "mrr": 0.14285714285714285,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1996,
+          "naive_tokens": 333435,
+          "search_ms": 101.17,
+          "context_ms": 100.18
+        },
+        {
+          "query": "generate shell completion scripts for bash, zsh and fish",
+          "expected": [
+            "clap_complete/src/aot/generator/mod.rs",
+            "clap_complete/src/lib.rs"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.077,
+          "context_tokens": 1929,
+          "naive_tokens": 479480,
+          "search_ms": 79.55,
+          "context_ms": 107.07
+        },
+        {
+          "query": "derive macro that turns struct fields into arguments",
+          "expected": [
+            "clap_derive/src/derives/args.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.083,
+          "context_tokens": 1983,
+          "naive_tokens": 188273,
+          "search_ms": 68.32,
+          "context_ms": 95.23
+        },
+        {
+          "query": "render the help message and wrap long lines",
+          "expected": [
+            "clap_builder/src/output/help_template.rs",
+            "clap_builder/src/output/textwrap/mod.rs"
+          ],
+          "rank": 5,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.2,
+          "context_hit": 1,
+          "context_precision": 0.1,
+          "context_tokens": 1988,
+          "naive_tokens": 504531,
+          "search_ms": 62.63,
+          "context_ms": 88.7
+        },
+        {
+          "query": "suggest a similar subcommand name when the user makes a typo",
+          "expected": [
+            "clap_builder/src/parser/features/suggestions.rs"
+          ],
+          "rank": 3,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.3333333333333333,
+          "context_hit": 1,
+          "context_precision": 0.111,
+          "context_tokens": 1995,
+          "naive_tokens": 497560,
+          "search_ms": 66.28,
+          "context_ms": 105.88
+        },
+        {
+          "query": "convert argument strings into typed values and validate them",
+          "expected": [
+            "clap_builder/src/builder/value_parser.rs"
+          ],
+          "rank": 7,
+          "recall@5": 0,
+          "recall@10": 1,
+          "mrr": 0.14285714285714285,
+          "context_hit": 1,
+          "context_precision": 0.091,
+          "context_tokens": 1961,
+          "naive_tokens": 158138,
+          "search_ms": 69.13,
+          "context_ms": 98.91
+        },
+        {
+          "query": "format error messages with context about the failing argument",
+          "expected": [
+            "clap_builder/src/error/format.rs"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.2,
+          "context_tokens": 1695,
+          "naive_tokens": 184089,
+          "search_ms": 66.4,
+          "context_ms": 94.38
+        },
+        {
+          "query": "write a man page for the command",
+          "expected": [
+            "clap_mangen/src/lib.rs",
+            "clap_mangen/src/render.rs"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.143,
+          "context_tokens": 1933,
+          "naive_tokens": 348067,
+          "search_ms": 68.03,
+          "context_ms": 87.59
+        },
+        {
+          "query": "arguments that conflict with or require each other in groups",
+          "expected": [
+            "clap_builder/src/builder/arg_group.rs",
+            "clap_builder/src/parser/validator.rs"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.167,
+          "context_tokens": 1965,
+          "naive_tokens": 165361,
+          "search_ms": 66.74,
+          "context_ms": 86.82
+        },
+        {
+          "query": "list of allowed values an argument can take",
+          "expected": [
+            "clap_builder/src/builder/possible_value.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1993,
+          "naive_tokens": 330243,
+          "search_ms": 64.63,
+          "context_ms": 121.65
+        },
+        {
+          "query": "colors and styles used in terminal help output",
+          "expected": [
+            "clap_builder/src/builder/styling.rs"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.167,
+          "context_tokens": 1932,
+          "naive_tokens": 506718,
+          "search_ms": 91.36,
+          "context_ms": 88.45
+        },
+        {
+          "query": "derive subcommands from an enum",
+          "expected": [
+            "clap_derive/src/derives/subcommand.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.071,
+          "context_tokens": 1975,
+          "naive_tokens": 202742,
+          "search_ms": 69.52,
+          "context_ms": 100.19
+        },
+        {
+          "query": "read the values the user passed after parsing finishes",
+          "expected": [
+            "clap_builder/src/parser/matches/arg_matches.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1971,
+          "naive_tokens": 105096,
+          "search_ms": 67.87,
+          "context_ms": 107.95
+        },
+        {
+          "query": "debug-mode sanity checks on how the command was configured",
+          "expected": [
+            "clap_builder/src/builder/debug_asserts.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1995,
+          "naive_tokens": 277596,
+          "search_ms": 75.32,
+          "context_ms": 109.5
+        }
+      ]
+    },
+    "heuristic": {
+      "evaluated": 14,
+      "recall@5": 0.571,
+      "recall@10": 0.643,
+      "mrr": 0.35,
+      "context_hit_rate": 0.714,
+      "mean_context_tokens": 1939.3,
+      "mean_naive_exploration_tokens": 305809.2,
+      "token_reduction_vs_naive": 0.994,
+      "token_reduction_vs_whole_repo": 0.997,
+      "mean_search_ms": 10.46,
+      "mean_context_ms": 37.09,
+      "mode": "heuristic",
+      "rows": [
+        {
+          "query": "parse raw command line words into matched arguments",
+          "expected": [
+            "clap_builder/src/parser/parser.rs",
+            "clap_lex/src/lib.rs"
+          ],
+          "rank": 5,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.2,
+          "context_hit": 1,
+          "context_precision": 0.143,
+          "context_tokens": 1988,
+          "naive_tokens": 333435,
+          "search_ms": 11.79,
+          "context_ms": 40.46
+        },
+        {
+          "query": "generate shell completion scripts for bash, zsh and fish",
+          "expected": [
+            "clap_complete/src/aot/generator/mod.rs",
+            "clap_complete/src/lib.rs"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.083,
+          "context_tokens": 1923,
+          "naive_tokens": 479480,
+          "search_ms": 9.73,
+          "context_ms": 34.33
+        },
+        {
+          "query": "derive macro that turns struct fields into arguments",
+          "expected": [
+            "clap_derive/src/derives/args.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1950,
+          "naive_tokens": 188273,
+          "search_ms": 12.87,
+          "context_ms": 38.08
+        },
+        {
+          "query": "render the help message and wrap long lines",
+          "expected": [
+            "clap_builder/src/output/help_template.rs",
+            "clap_builder/src/output/textwrap/mod.rs"
+          ],
+          "rank": 5,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.2,
+          "context_hit": 1,
+          "context_precision": 0.125,
+          "context_tokens": 1991,
+          "naive_tokens": 504531,
+          "search_ms": 10.03,
+          "context_ms": 39.81
+        },
+        {
+          "query": "suggest a similar subcommand name when the user makes a typo",
+          "expected": [
+            "clap_builder/src/parser/features/suggestions.rs"
+          ],
+          "rank": 3,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.3333333333333333,
+          "context_hit": 1,
+          "context_precision": 0.111,
+          "context_tokens": 1998,
+          "naive_tokens": 497560,
+          "search_ms": 10.96,
+          "context_ms": 47.16
+        },
+        {
+          "query": "convert argument strings into typed values and validate them",
+          "expected": [
+            "clap_builder/src/builder/value_parser.rs"
+          ],
+          "rank": 6,
+          "recall@5": 0,
+          "recall@10": 1,
+          "mrr": 0.16666666666666666,
+          "context_hit": 1,
+          "context_precision": 0.091,
+          "context_tokens": 1960,
+          "naive_tokens": 158138,
+          "search_ms": 15.87,
+          "context_ms": 44.83
+        },
+        {
+          "query": "format error messages with context about the failing argument",
+          "expected": [
+            "clap_builder/src/error/format.rs"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.2,
+          "context_tokens": 1857,
+          "naive_tokens": 184089,
+          "search_ms": 8.56,
+          "context_ms": 30.44
+        },
+        {
+          "query": "write a man page for the command",
+          "expected": [
+            "clap_mangen/src/lib.rs",
+            "clap_mangen/src/render.rs"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.143,
+          "context_tokens": 1995,
+          "naive_tokens": 348067,
+          "search_ms": 8.11,
+          "context_ms": 31.04
+        },
+        {
+          "query": "arguments that conflict with or require each other in groups",
+          "expected": [
+            "clap_builder/src/builder/arg_group.rs",
+            "clap_builder/src/parser/validator.rs"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.25,
+          "context_tokens": 1911,
+          "naive_tokens": 165361,
+          "search_ms": 9.27,
+          "context_ms": 32.41
+        },
+        {
+          "query": "list of allowed values an argument can take",
+          "expected": [
+            "clap_builder/src/builder/possible_value.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1985,
+          "naive_tokens": 330243,
+          "search_ms": 10.81,
+          "context_ms": 35.88
+        },
+        {
+          "query": "colors and styles used in terminal help output",
+          "expected": [
+            "clap_builder/src/builder/styling.rs"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.2,
+          "context_tokens": 1680,
+          "naive_tokens": 506718,
+          "search_ms": 9.42,
+          "context_ms": 31.24
+        },
+        {
+          "query": "derive subcommands from an enum",
+          "expected": [
+            "clap_derive/src/derives/subcommand.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.071,
+          "context_tokens": 1981,
+          "naive_tokens": 202742,
+          "search_ms": 10.53,
+          "context_ms": 37.45
+        },
+        {
+          "query": "read the values the user passed after parsing finishes",
+          "expected": [
+            "clap_builder/src/parser/matches/arg_matches.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1960,
+          "naive_tokens": 105096,
+          "search_ms": 10.39,
+          "context_ms": 34.52
+        },
+        {
+          "query": "debug-mode sanity checks on how the command was configured",
+          "expected": [
+            "clap_builder/src/builder/debug_asserts.rs"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1971,
+          "naive_tokens": 277596,
+          "search_ms": 8.1,
+          "context_ms": 41.61
+        }
+      ]
+    }
+  },
+  "notes": [
+    "naive_tokens: tokens read by an agent opening files ranked by query-term hits until every expected file is read (lower bound on blind exploration).",
+    "Self-supervised queries test semantic retrieval; supply a spec with real tasks for an end-to-end measurement (see agent_benchmark)."
+  ]
+}

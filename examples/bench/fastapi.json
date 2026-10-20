@@ -1,0 +1,148 @@
+{
+  "description": "fastapi/fastapi @ 0.150.0 (03002a0). Natural-language developer questions; queries avoid the identifiers they are looking for. Expected files were checked by hand.",
+  "tasks": [
+    {
+      "query": "where are request body fields validated against the declared model",
+      "expected": [
+        "fastapi/dependencies/utils.py",
+        "fastapi/routing.py"
+      ]
+    },
+    {
+      "query": "how is the OpenAPI schema document built from all registered routes",
+      "expected": [
+        "fastapi/openapi/utils.py"
+      ]
+    },
+    {
+      "query": "turn validation failures into a 422 error response",
+      "expected": [
+        "fastapi/exception_handlers.py"
+      ]
+    },
+    {
+      "query": "clean up dependencies that yield after the response is sent",
+      "expected": [
+        "fastapi/dependencies/utils.py",
+        "fastapi/routing.py"
+      ]
+    },
+    {
+      "query": "extract a bearer token for the OAuth2 password flow",
+      "expected": [
+        "fastapi/security/oauth2.py"
+      ]
+    },
+    {
+      "query": "read an API key from a header, query parameter or cookie",
+      "expected": [
+        "fastapi/security/api_key.py"
+      ]
+    },
+    {
+      "query": "serve the interactive Swagger UI documentation page",
+      "expected": [
+        "fastapi/openapi/docs.py"
+      ]
+    },
+    {
+      "query": "convert dataclasses, datetimes and models into JSON compatible data",
+      "expected": [
+        "fastapi/encoders.py"
+      ]
+    },
+    {
+      "query": "mount a router under a prefix with tags into the application",
+      "expected": [
+        "fastapi/routing.py",
+        "fastapi/applications.py"
+      ]
+    },
+    {
+      "query": "schedule work to run after returning the response",
+      "expected": [
+        "fastapi/background.py"
+      ]
+    },
+    {
+      "query": "route websocket connections to endpoint functions",
+      "expected": [
+        "fastapi/routing.py",
+        "fastapi/websockets.py"
+      ]
+    },
+    {
+      "query": "receive uploaded files sent as multipart form data",
+      "expected": [
+        "fastapi/datastructures.py",
+        "fastapi/params.py",
+        "fastapi/param_functions.py"
+      ]
+    },
+    {
+      "query": "parse HTTP basic authentication credentials",
+      "expected": [
+        "fastapi/security/http.py"
+      ]
+    },
+    {
+      "query": "command line entry point that starts the server",
+      "expected": [
+        "fastapi/cli.py",
+        "fastapi/__main__.py"
+      ]
+    },
+    {
+      "query": "filter the returned data down to the declared response model",
+      "expected": [
+        "fastapi/routing.py"
+      ]
+    },
+    {
+      "query": "support both major versions of the validation library",
+      "expected": [
+        "fastapi/_compat/__init__.py",
+        "fastapi/_compat/shared.py",
+        "fastapi/_compat/v2.py"
+      ]
+    },
+    {
+      "query": "declare path, query, header and cookie parameters with metadata",
+      "expected": [
+        "fastapi/param_functions.py",
+        "fastapi/params.py"
+      ]
+    },
+    {
+      "query": "allow cross-origin requests from browsers",
+      "expected": [
+        "fastapi/middleware/cors.py"
+      ]
+    },
+    {
+      "query": "raise an error with a status code and detail message",
+      "expected": [
+        "fastapi/exceptions.py"
+      ]
+    },
+    {
+      "query": "generate a unique operation id for each route",
+      "expected": [
+        "fastapi/utils.py",
+        "fastapi/routing.py"
+      ]
+    },
+    {
+      "query": "run blocking functions in a thread pool from async code",
+      "expected": [
+        "fastapi/concurrency.py"
+      ]
+    },
+    {
+      "query": "return HTML, plain text, redirects or streaming responses",
+      "expected": [
+        "fastapi/responses.py"
+      ]
+    }
+  ]
+}

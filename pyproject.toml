@@ -28,7 +28,7 @@ all = ["fastembed>=0.3", "numpy>=1.24", "anthropic>=0.70", "openai>=1.40", "tree
        "tree-sitter-language-pack>=0.7", "pypdf>=4", "pyyaml>=6"]
 
 [tool.setuptools.package-data]
-promapkin = ["extract/*.js", "py.typed"]
+promapkin = ["extract/*.js", "graph_template.html", "py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

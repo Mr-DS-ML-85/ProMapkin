@@ -89,8 +89,9 @@ def _naive_exploration_tokens(ws: Workspace, query: str, expected: set[str], fil
 def retrieval_benchmark(ws: Workspace, spec: dict[str, Any] | None = None, budget: int = 2000, limit: int = 40,
                         ablation: bool = True) -> dict[str, Any]:
     tasks = (spec or {}).get("tasks") or self_supervised_tasks(ws, limit)
-    source_files = [r[0] for r in ws.store.conn.execute(
-        "SELECT path FROM files WHERE language IN ('python','javascript','typescript')")]
+    from promapkin.extract import NON_CODE
+    non_code = ",".join(f"'{x}'" for x in sorted(NON_CODE))
+    source_files = [r[0] for r in ws.store.conn.execute(f"SELECT path FROM files WHERE language NOT IN ({non_code})")]
     file_tokens = {}
     for p in source_files:
         try:
@@ -120,7 +121,7 @@ def retrieval_benchmark(ws: Workspace, spec: dict[str, Any] | None = None, budge
                 files_ranked = list(dict.fromkeys(_hit_file(h) for h in hits if _hit_file(h)))
                 rank = next((i + 1 for i, f in enumerate(files_ranked) if f in expected), None)
                 t1 = time.perf_counter()
-                pkg = ret.build_context(t["query"], budget=budget, include_source=True)
+                pkg = ret.build_context(t["query"], budget=budget, include_source=True, use_cache=False)
                 ctx_latency = time.perf_counter() - t1
                 pkg_files = {f["fact"].split(" @ ")[-1].split(":")[0] for f in pkg["facts"] if " @ " in f["fact"]} | \
                     {s["location"].split(":")[0] for s in pkg["sources"]}

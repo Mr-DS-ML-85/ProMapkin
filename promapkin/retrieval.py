@@ -55,6 +55,26 @@ def estimate_tokens(text: str) -> int:
     return max(1, math.ceil(len(text) / 4))
 
 
+NOISY_DOCS = re.compile(r"(?i)(changelog|changes|history|release[-_ ]?notes|contributing|code[-_]of[-_]conduct|"
+                        r"license|authors|security)[^/]*\.(md|rst|txt|markdown)")
+RETRIEVAL_VERSION = 4   # part of the context-cache key: packages built by older ranking code are not reused
+EXAMPLE_DIRS = {"examples", "example", "docs_src", "samples", "sample", "demo", "demos", "tutorial", "tutorials",
+                "playground", "sandbox", "benchmarks", "bench", "fixtures"}
+VENDORED_DIRS = {"vendor", "vendored", "third_party", "third-party", "node_modules", "external", "deps"}
+
+
+def path_role(path: str) -> str:
+    """'test', 'example', 'vendored' or 'source', from directory names."""
+    parts = path.lower().split("/")[:-1]
+    if any(p in ("tests", "test", "__tests__", "spec", "testing", "e2e") for p in parts):
+        return "test"
+    if any(p in EXAMPLE_DIRS for p in parts):
+        return "example"
+    if any(p in VENDORED_DIRS for p in parts):
+        return "vendored"
+    return "source"
+
+
 class Retriever:
     def __init__(self, ws: Workspace, rt: Any = None):
         self.ws = ws
@@ -103,6 +123,20 @@ class Retriever:
         add("symbol", sorted(best.items(), key=lambda t: -t[1]))
         # 2. lexical BM25
         add("lexical", self.store.search(query, limit=60, kinds=kinds))
+        # 2b. documentation bridge: prose often answers a question in the words it is asked in, and doc sections
+        # link to the code they describe. Their match is passed on to that code.
+        code_kinds = [k for k in kinds if k not in ("document", "doc_section", "decision")]
+        if code_kinds:
+            bridged: dict[str, float] = {}
+            doc_hits = [(d, sc) for d, sc in self.store.search(query, limit=25, kinds=["doc_section", "document"])
+                        if not NOISY_DOCS.search(d)][:15]
+            for rank, (did, _score) in enumerate(doc_hits):
+                targets = [r[0] for r in self.store.conn.execute(
+                    "SELECT dst FROM edges WHERE src = ? AND type = 'documents'", (did,))]
+                targets = [t for t in targets if t.startswith(("symbol:", "module:", "api:"))][:12]
+                for t in targets:
+                    bridged[t] = max(bridged.get(t, 0.0), 1.0 / (rank + 1) / (1 + 0.15 * len(targets)))
+            add("doc_bridge", sorted(bridged.items(), key=lambda t: -t[1]))
         # 3. semantic (ML tier only)
         if self.ml:
             from promapkin.ml.embedders import top_k
@@ -115,8 +149,10 @@ class Retriever:
         # Neural embeddings carry real semantics; the built-in hashing embedder is mostly lexical, so it only
         # nudges the ranking (measured on examples/bench: full weight hurt MRR).
         neural = self.ml and self.rt.embedder.neural
-        weights = {"symbol": 1.0, "lexical": 0.8, "semantic": 0.7 if neural else 0.25,
+        weights = {"symbol": 1.0, "lexical": 0.8, "doc_bridge": 0.45, "semantic": 0.7 if neural else 0.25,
                    "graph_semantic": 0.4 if neural else 0.1}
+        wants_tests = bool(re.search(r"\btest", query, re.I))
+        wants_examples = bool(re.search(r"\b(example|tutorial|sample|demo)", query, re.I))
         fused = []
         for nid, sig in signals.items():
             n = self.store.node(nid)
@@ -124,8 +160,13 @@ class Retriever:
                 continue
             score = sum(weights[k] * v for k, v in sig.items())
             score *= 0.6 + 0.4 * ev.weight(n["evidence"], n["status"])
-            if n["attrs"].get("test"):
-                score *= 0.8
+            role = path_role(n["file"] or "")
+            if (n["attrs"].get("test") or n["kind"] == "test" or role == "test") and not wants_tests:
+                score *= 0.55
+            elif role == "example" and not wants_examples:
+                score *= 0.6
+            elif role == "vendored":
+                score *= 0.5
             if n["kind"] in ("module", "document"):
                 score *= 0.75   # prefer concrete symbols over whole modules
                 if (n["attrs"].get("loc") or 99) < 5:
@@ -175,13 +216,14 @@ class Retriever:
     # ---------------------------------------------------------------- context compiler
     def build_context(self, task: str, budget: int | None = None, constraints: list[str] | None = None,
                       validation: list[str] | None = None, include_source: bool = True,
-                      focus: list[str] | None = None, handoff: dict[str, Any] | None = None) -> dict[str, Any]:
+                      focus: list[str] | None = None, handoff: dict[str, Any] | None = None,
+                      use_cache: bool = True) -> dict[str, Any]:
         budget = budget or self.ws.config.default_token_budget
-        key = hashlib.sha1(json.dumps([task, budget, constraints, validation, include_source, focus,
+        key = hashlib.sha1(json.dumps([RETRIEVAL_VERSION, task, budget, constraints, validation, include_source, focus,
                                        handoff.get("id") if handoff else None,
                                        handoff.get("version") if handoff else None, self.rt.classifier.mode,
                                        self.store.get_meta("indexed_at")], sort_keys=True).encode()).hexdigest()
-        cached = self.store.get_meta(f"ctx:{key}")
+        cached = self.store.get_meta(f"ctx:{key}") if use_cache else None
         if cached:
             pkg = json.loads(cached)
             pkg["cache"] = "hit"

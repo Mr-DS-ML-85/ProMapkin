@@ -1,0 +1,94 @@
+{
+  "description": "clap-rs/clap @ ccc89b8 (Rust). Natural-language questions; queries avoid identifiers.",
+  "tasks": [
+    {
+      "query": "parse raw command line words into matched arguments",
+      "expected": [
+        "clap_builder/src/parser/parser.rs",
+        "clap_lex/src/lib.rs"
+      ]
+    },
+    {
+      "query": "generate shell completion scripts for bash, zsh and fish",
+      "expected": [
+        "clap_complete/src/aot/generator/mod.rs",
+        "clap_complete/src/lib.rs"
+      ]
+    },
+    {
+      "query": "derive macro that turns struct fields into arguments",
+      "expected": [
+        "clap_derive/src/derives/args.rs"
+      ]
+    },
+    {
+      "query": "render the help message and wrap long lines",
+      "expected": [
+        "clap_builder/src/output/help_template.rs",
+        "clap_builder/src/output/textwrap/mod.rs"
+      ]
+    },
+    {
+      "query": "suggest a similar subcommand name when the user makes a typo",
+      "expected": [
+        "clap_builder/src/parser/features/suggestions.rs"
+      ]
+    },
+    {
+      "query": "convert argument strings into typed values and validate them",
+      "expected": [
+        "clap_builder/src/builder/value_parser.rs"
+      ]
+    },
+    {
+      "query": "format error messages with context about the failing argument",
+      "expected": [
+        "clap_builder/src/error/format.rs"
+      ]
+    },
+    {
+      "query": "write a man page for the command",
+      "expected": [
+        "clap_mangen/src/render.rs",
+        "clap_mangen/src/lib.rs"
+      ]
+    },
+    {
+      "query": "arguments that conflict with or require each other in groups",
+      "expected": [
+        "clap_builder/src/builder/arg_group.rs",
+        "clap_builder/src/parser/validator.rs"
+      ]
+    },
+    {
+      "query": "list of allowed values an argument can take",
+      "expected": [
+        "clap_builder/src/builder/possible_value.rs"
+      ]
+    },
+    {
+      "query": "colors and styles used in terminal help output",
+      "expected": [
+        "clap_builder/src/builder/styling.rs"
+      ]
+    },
+    {
+      "query": "derive subcommands from an enum",
+      "expected": [
+        "clap_derive/src/derives/subcommand.rs"
+      ]
+    },
+    {
+      "query": "read the values the user passed after parsing finishes",
+      "expected": [
+        "clap_builder/src/parser/matches/arg_matches.rs"
+      ]
+    },
+    {
+      "query": "debug-mode sanity checks on how the command was configured",
+      "expected": [
+        "clap_builder/src/builder/debug_asserts.rs"
+      ]
+    }
+  ]
+}

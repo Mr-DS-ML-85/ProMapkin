@@ -339,9 +339,25 @@ class _Walker:
             self.f.ref(self.mod_id, target, "imports", node.start_point[0] + 1, module=self.mod)
 
 
+SKIP_BEFORE_DOC = {"attribute_item", "inner_attribute_item", "attribute", "decorator", "annotation",
+                   "marker_annotation", "attribute_list", "attributes"}
+
+
 def _doc_before(node: Any) -> str | None:
+    """The comment block right above a declaration: every adjacent comment line, stepping over attributes,
+    decorators and annotations that sit between the doc comment and the declaration (Rust `#[...]`, C# `[...]`,
+    Java/Kotlin `@...`)."""
+    parts: list[str] = []
+    line = node.start_point[0]
     prev = node.prev_named_sibling
-    if prev is not None and "comment" in prev.type and prev.end_point[0] >= node.start_point[0] - 1:
-        body = re.sub(r"^\s*(///?|#+|/\*+|\*+/?|--)", "", _text(prev), flags=re.M)
-        return " ".join(body.split())[:400] or None
-    return None
+    while prev is not None and prev.end_point[0] >= line - 1:
+        if "comment" in prev.type:
+            parts.append(_text(prev))
+        elif prev.type not in SKIP_BEFORE_DOC:
+            break
+        line = prev.start_point[0]
+        prev = prev.prev_named_sibling
+    if not parts:
+        return None
+    body = re.sub(r"^\s*(///?|//!|#+|/\*+!?|\*+/?|--|;+)", "", "\n".join(reversed(parts)), flags=re.M)
+    return " ".join(body.split())[:800] or None

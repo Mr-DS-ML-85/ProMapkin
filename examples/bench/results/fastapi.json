@@ -1,0 +1,775 @@
+{
+  "tasks": 22,
+  "task_source": "spec",
+  "budget": 2000,
+  "repository_tokens": 1079067,
+  "setup_overhead": {
+    "last_scan_seconds": 44.176,
+    "files_indexed": 3155,
+    "index_bytes": 344809472
+  },
+  "results": {
+    "configured": {
+      "evaluated": 22,
+      "recall@5": 0.682,
+      "recall@10": 0.682,
+      "mrr": 0.471,
+      "context_hit_rate": 0.682,
+      "mean_context_tokens": 1812.7,
+      "mean_naive_exploration_tokens": 437771.6,
+      "token_reduction_vs_naive": 0.996,
+      "token_reduction_vs_whole_repo": 0.998,
+      "mean_search_ms": 371.15,
+      "mean_context_ms": 446.85,
+      "mode": "hybrid",
+      "rows": [
+        {
+          "query": "where are request body fields validated against the declared model",
+          "expected": [
+            "fastapi/dependencies/utils.py",
+            "fastapi/routing.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1716,
+          "naive_tokens": 152150,
+          "search_ms": 356.12,
+          "context_ms": 410.55
+        },
+        {
+          "query": "how is the OpenAPI schema document built from all registered routes",
+          "expected": [
+            "fastapi/openapi/utils.py"
+          ],
+          "rank": 5,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.2,
+          "context_hit": 1,
+          "context_precision": 0.111,
+          "context_tokens": 1994,
+          "naive_tokens": 243553,
+          "search_ms": 404.5,
+          "context_ms": 458.16
+        },
+        {
+          "query": "turn validation failures into a 422 error response",
+          "expected": [
+            "fastapi/exception_handlers.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1979,
+          "naive_tokens": 857135,
+          "search_ms": 311.03,
+          "context_ms": 369.44
+        },
+        {
+          "query": "clean up dependencies that yield after the response is sent",
+          "expected": [
+            "fastapi/dependencies/utils.py",
+            "fastapi/routing.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 2000,
+          "naive_tokens": 402293,
+          "search_ms": 336.12,
+          "context_ms": 453.46
+        },
+        {
+          "query": "extract a bearer token for the OAuth2 password flow",
+          "expected": [
+            "fastapi/security/oauth2.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.067,
+          "context_tokens": 1978,
+          "naive_tokens": 117401,
+          "search_ms": 409.26,
+          "context_ms": 446.44
+        },
+        {
+          "query": "read an API key from a header, query parameter or cookie",
+          "expected": [
+            "fastapi/security/api_key.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.048,
+          "context_tokens": 1995,
+          "naive_tokens": 263608,
+          "search_ms": 404.67,
+          "context_ms": 599.39
+        },
+        {
+          "query": "serve the interactive Swagger UI documentation page",
+          "expected": [
+            "fastapi/openapi/docs.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.111,
+          "context_tokens": 1391,
+          "naive_tokens": 236623,
+          "search_ms": 347.56,
+          "context_ms": 402.03
+        },
+        {
+          "query": "convert dataclasses, datetimes and models into JSON compatible data",
+          "expected": [
+            "fastapi/encoders.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.067,
+          "context_tokens": 1999,
+          "naive_tokens": 411888,
+          "search_ms": 384.18,
+          "context_ms": 458.56
+        },
+        {
+          "query": "mount a router under a prefix with tags into the application",
+          "expected": [
+            "fastapi/applications.py",
+            "fastapi/routing.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.333,
+          "context_tokens": 1997,
+          "naive_tokens": 111349,
+          "search_ms": 400.32,
+          "context_ms": 486.96
+        },
+        {
+          "query": "schedule work to run after returning the response",
+          "expected": [
+            "fastapi/background.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.091,
+          "context_tokens": 1991,
+          "naive_tokens": 803258,
+          "search_ms": 388.08,
+          "context_ms": 476.79
+        },
+        {
+          "query": "route websocket connections to endpoint functions",
+          "expected": [
+            "fastapi/routing.py",
+            "fastapi/websockets.py"
+          ],
+          "rank": 3,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.3333333333333333,
+          "context_hit": 1,
+          "context_precision": 0.071,
+          "context_tokens": 1985,
+          "naive_tokens": 356419,
+          "search_ms": 325.31,
+          "context_ms": 403.35
+        },
+        {
+          "query": "receive uploaded files sent as multipart form data",
+          "expected": [
+            "fastapi/datastructures.py",
+            "fastapi/param_functions.py",
+            "fastapi/params.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.3,
+          "context_tokens": 2000,
+          "naive_tokens": 379913,
+          "search_ms": 360.56,
+          "context_ms": 440.39
+        },
+        {
+          "query": "parse HTTP basic authentication credentials",
+          "expected": [
+            "fastapi/security/http.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.048,
+          "context_tokens": 1996,
+          "naive_tokens": 114721,
+          "search_ms": 366.48,
+          "context_ms": 437.92
+        },
+        {
+          "query": "command line entry point that starts the server",
+          "expected": [
+            "fastapi/__main__.py",
+            "fastapi/cli.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 2000,
+          "naive_tokens": 1079067,
+          "search_ms": 364.55,
+          "context_ms": 427.23
+        },
+        {
+          "query": "filter the returned data down to the declared response model",
+          "expected": [
+            "fastapi/routing.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.077,
+          "context_tokens": 1982,
+          "naive_tokens": 65074,
+          "search_ms": 379.48,
+          "context_ms": 450.93
+        },
+        {
+          "query": "support both major versions of the validation library",
+          "expected": [
+            "fastapi/_compat/__init__.py",
+            "fastapi/_compat/shared.py",
+            "fastapi/_compat/v2.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 979,
+          "naive_tokens": 1079067,
+          "search_ms": 376.15,
+          "context_ms": 418.99
+        },
+        {
+          "query": "declare path, query, header and cookie parameters with metadata",
+          "expected": [
+            "fastapi/param_functions.py",
+            "fastapi/params.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.133,
+          "context_tokens": 1997,
+          "naive_tokens": 474477,
+          "search_ms": 388.65,
+          "context_ms": 512.13
+        },
+        {
+          "query": "allow cross-origin requests from browsers",
+          "expected": [
+            "fastapi/middleware/cors.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1087,
+          "naive_tokens": 1068832,
+          "search_ms": 347.31,
+          "context_ms": 413.2
+        },
+        {
+          "query": "raise an error with a status code and detail message",
+          "expected": [
+            "fastapi/exceptions.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.043,
+          "context_tokens": 1980,
+          "naive_tokens": 369079,
+          "search_ms": 343.83,
+          "context_ms": 409.07
+        },
+        {
+          "query": "generate a unique operation id for each route",
+          "expected": [
+            "fastapi/routing.py",
+            "fastapi/utils.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.133,
+          "context_tokens": 1984,
+          "naive_tokens": 385697,
+          "search_ms": 337.16,
+          "context_ms": 428.65
+        },
+        {
+          "query": "run blocking functions in a thread pool from async code",
+          "expected": [
+            "fastapi/concurrency.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 856,
+          "naive_tokens": 233655,
+          "search_ms": 394.45,
+          "context_ms": 424.82
+        },
+        {
+          "query": "return HTML, plain text, redirects or streaming responses",
+          "expected": [
+            "fastapi/responses.py"
+          ],
+          "rank": 3,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.3333333333333333,
+          "context_hit": 1,
+          "context_precision": 0.05,
+          "context_tokens": 1994,
+          "naive_tokens": 425716,
+          "search_ms": 439.51,
+          "context_ms": 502.17
+        }
+      ]
+    },
+    "heuristic": {
+      "evaluated": 22,
+      "recall@5": 0.682,
+      "recall@10": 0.682,
+      "mrr": 0.494,
+      "context_hit_rate": 0.682,
+      "mean_context_tokens": 1838.1,
+      "mean_naive_exploration_tokens": 437771.6,
+      "token_reduction_vs_naive": 0.996,
+      "token_reduction_vs_whole_repo": 0.998,
+      "mean_search_ms": 60.22,
+      "mean_context_ms": 136.29,
+      "mode": "heuristic",
+      "rows": [
+        {
+          "query": "where are request body fields validated against the declared model",
+          "expected": [
+            "fastapi/dependencies/utils.py",
+            "fastapi/routing.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1832,
+          "naive_tokens": 152150,
+          "search_ms": 63.28,
+          "context_ms": 144.77
+        },
+        {
+          "query": "how is the OpenAPI schema document built from all registered routes",
+          "expected": [
+            "fastapi/openapi/utils.py"
+          ],
+          "rank": 5,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.2,
+          "context_hit": 1,
+          "context_precision": 0.143,
+          "context_tokens": 1994,
+          "naive_tokens": 243553,
+          "search_ms": 109.09,
+          "context_ms": 180.54
+        },
+        {
+          "query": "turn validation failures into a 422 error response",
+          "expected": [
+            "fastapi/exception_handlers.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 2000,
+          "naive_tokens": 857135,
+          "search_ms": 31.81,
+          "context_ms": 84.78
+        },
+        {
+          "query": "clean up dependencies that yield after the response is sent",
+          "expected": [
+            "fastapi/dependencies/utils.py",
+            "fastapi/routing.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1988,
+          "naive_tokens": 402293,
+          "search_ms": 59.85,
+          "context_ms": 116.55
+        },
+        {
+          "query": "extract a bearer token for the OAuth2 password flow",
+          "expected": [
+            "fastapi/security/oauth2.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.071,
+          "context_tokens": 1993,
+          "naive_tokens": 117401,
+          "search_ms": 63.3,
+          "context_ms": 121.08
+        },
+        {
+          "query": "read an API key from a header, query parameter or cookie",
+          "expected": [
+            "fastapi/security/api_key.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.05,
+          "context_tokens": 1996,
+          "naive_tokens": 263608,
+          "search_ms": 142.76,
+          "context_ms": 252.06
+        },
+        {
+          "query": "serve the interactive Swagger UI documentation page",
+          "expected": [
+            "fastapi/openapi/docs.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.111,
+          "context_tokens": 1308,
+          "naive_tokens": 236623,
+          "search_ms": 55.89,
+          "context_ms": 101.18
+        },
+        {
+          "query": "convert dataclasses, datetimes and models into JSON compatible data",
+          "expected": [
+            "fastapi/encoders.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.067,
+          "context_tokens": 1994,
+          "naive_tokens": 411888,
+          "search_ms": 77.6,
+          "context_ms": 137.38
+        },
+        {
+          "query": "mount a router under a prefix with tags into the application",
+          "expected": [
+            "fastapi/applications.py",
+            "fastapi/routing.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.5,
+          "context_tokens": 2000,
+          "naive_tokens": 111349,
+          "search_ms": 42.08,
+          "context_ms": 145.37
+        },
+        {
+          "query": "schedule work to run after returning the response",
+          "expected": [
+            "fastapi/background.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.083,
+          "context_tokens": 1996,
+          "naive_tokens": 803258,
+          "search_ms": 46.16,
+          "context_ms": 139.85
+        },
+        {
+          "query": "route websocket connections to endpoint functions",
+          "expected": [
+            "fastapi/routing.py",
+            "fastapi/websockets.py"
+          ],
+          "rank": 3,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.3333333333333333,
+          "context_hit": 1,
+          "context_precision": 0.071,
+          "context_tokens": 1974,
+          "naive_tokens": 356419,
+          "search_ms": 30.58,
+          "context_ms": 108.05
+        },
+        {
+          "query": "receive uploaded files sent as multipart form data",
+          "expected": [
+            "fastapi/datastructures.py",
+            "fastapi/param_functions.py",
+            "fastapi/params.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.3,
+          "context_tokens": 1985,
+          "naive_tokens": 379913,
+          "search_ms": 36.24,
+          "context_ms": 115.74
+        },
+        {
+          "query": "parse HTTP basic authentication credentials",
+          "expected": [
+            "fastapi/security/http.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.053,
+          "context_tokens": 1991,
+          "naive_tokens": 114721,
+          "search_ms": 89.33,
+          "context_ms": 174.8
+        },
+        {
+          "query": "command line entry point that starts the server",
+          "expected": [
+            "fastapi/__main__.py",
+            "fastapi/cli.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1999,
+          "naive_tokens": 1079067,
+          "search_ms": 38.14,
+          "context_ms": 127.6
+        },
+        {
+          "query": "filter the returned data down to the declared response model",
+          "expected": [
+            "fastapi/routing.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.071,
+          "context_tokens": 1986,
+          "naive_tokens": 65074,
+          "search_ms": 70.87,
+          "context_ms": 178.52
+        },
+        {
+          "query": "support both major versions of the validation library",
+          "expected": [
+            "fastapi/_compat/__init__.py",
+            "fastapi/_compat/shared.py",
+            "fastapi/_compat/v2.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1042,
+          "naive_tokens": 1079067,
+          "search_ms": 50.13,
+          "context_ms": 115.76
+        },
+        {
+          "query": "declare path, query, header and cookie parameters with metadata",
+          "expected": [
+            "fastapi/param_functions.py",
+            "fastapi/params.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.143,
+          "context_tokens": 1995,
+          "naive_tokens": 474477,
+          "search_ms": 66.49,
+          "context_ms": 258.19
+        },
+        {
+          "query": "allow cross-origin requests from browsers",
+          "expected": [
+            "fastapi/middleware/cors.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 984,
+          "naive_tokens": 1068832,
+          "search_ms": 29.12,
+          "context_ms": 77.04
+        },
+        {
+          "query": "raise an error with a status code and detail message",
+          "expected": [
+            "fastapi/exceptions.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.043,
+          "context_tokens": 1994,
+          "naive_tokens": 369079,
+          "search_ms": 57.78,
+          "context_ms": 117.41
+        },
+        {
+          "query": "generate a unique operation id for each route",
+          "expected": [
+            "fastapi/routing.py",
+            "fastapi/utils.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.067,
+          "context_tokens": 1997,
+          "naive_tokens": 385697,
+          "search_ms": 38.13,
+          "context_ms": 90.59
+        },
+        {
+          "query": "run blocking functions in a thread pool from async code",
+          "expected": [
+            "fastapi/concurrency.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1421,
+          "naive_tokens": 233655,
+          "search_ms": 63.11,
+          "context_ms": 98.17
+        },
+        {
+          "query": "return HTML, plain text, redirects or streaming responses",
+          "expected": [
+            "fastapi/responses.py"
+          ],
+          "rank": 3,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.3333333333333333,
+          "context_hit": 1,
+          "context_precision": 0.05,
+          "context_tokens": 1969,
+          "naive_tokens": 425716,
+          "search_ms": 63.06,
+          "context_ms": 112.92
+        }
+      ]
+    }
+  },
+  "notes": [
+    "naive_tokens: tokens read by an agent opening files ranked by query-term hits until every expected file is read (lower bound on blind exploration).",
+    "Self-supervised queries test semantic retrieval; supply a spec with real tasks for an end-to-end measurement (see agent_benchmark)."
+  ]
+}

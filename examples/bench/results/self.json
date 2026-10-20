@@ -1,0 +1,693 @@
+{
+  "tasks": 20,
+  "task_source": "spec",
+  "budget": 2000,
+  "repository_tokens": 246193,
+  "setup_overhead": {
+    "last_scan_seconds": 2.888,
+    "files_indexed": 114,
+    "index_bytes": 19275776
+  },
+  "results": {
+    "configured": {
+      "evaluated": 20,
+      "recall@5": 0.8,
+      "recall@10": 0.85,
+      "mrr": 0.658,
+      "context_hit_rate": 0.9,
+      "mean_context_tokens": 1945.8,
+      "mean_naive_exploration_tokens": 72779.0,
+      "token_reduction_vs_naive": 0.973,
+      "token_reduction_vs_whole_repo": 0.992,
+      "mean_search_ms": 18.65,
+      "mean_context_ms": 42.05,
+      "mode": "hybrid",
+      "rows": [
+        {
+          "query": "where are design patterns like strategy or adapter detected",
+          "expected": [
+            "promapkin/agents/specialists.py",
+            "promapkin/ml/classify.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.154,
+          "context_tokens": 1996,
+          "naive_tokens": 37834,
+          "search_ms": 32.24,
+          "context_ms": 55.47
+        },
+        {
+          "query": "how does the server refuse to read files outside the repository",
+          "expected": [
+            "promapkin/security.py"
+          ],
+          "rank": 4,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.25,
+          "context_hit": 1,
+          "context_precision": 0.083,
+          "context_tokens": 1944,
+          "naive_tokens": 160107,
+          "search_ms": 19.75,
+          "context_ms": 42.0
+        },
+        {
+          "query": "what happens when two agents update the same task record at once",
+          "expected": [
+            "promapkin/handoff.py"
+          ],
+          "rank": 6,
+          "recall@5": 0,
+          "recall@10": 1,
+          "mrr": 0.16666666666666666,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1794,
+          "naive_tokens": 92754,
+          "search_ms": 19.02,
+          "context_ms": 37.25
+        },
+        {
+          "query": "smoothing embeddings over neighbouring nodes in the graph",
+          "expected": [
+            "promapkin/ml/graph_ml.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.056,
+          "context_tokens": 1899,
+          "naive_tokens": 74069,
+          "search_ms": 17.82,
+          "context_ms": 38.91
+        },
+        {
+          "query": "fit facts into a limited number of tokens without dropping constraints",
+          "expected": [
+            "promapkin/retrieval.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.056,
+          "context_tokens": 1950,
+          "naive_tokens": 49767,
+          "search_ms": 15.33,
+          "context_ms": 38.65
+        },
+        {
+          "query": "ask the user before downloading a model",
+          "expected": [
+            "promapkin/ml/models.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.053,
+          "context_tokens": 1994,
+          "naive_tokens": 90944,
+          "search_ms": 15.88,
+          "context_ms": 39.37
+        },
+        {
+          "query": "detect express style http routes in typescript",
+          "expected": [
+            "promapkin/extract/js_ext.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.05,
+          "context_tokens": 1999,
+          "naive_tokens": 129893,
+          "search_ms": 15.75,
+          "context_ms": 38.11
+        },
+        {
+          "query": "mark agent conclusions as outdated after source files change",
+          "expected": [
+            "promapkin/maintenance.py",
+            "promapkin/scanner.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.095,
+          "context_tokens": 1998,
+          "naive_tokens": 106951,
+          "search_ms": 15.85,
+          "context_ms": 42.91
+        },
+        {
+          "query": "json rpc message loop over standard input",
+          "expected": [
+            "promapkin/mcp_server.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.091,
+          "context_tokens": 1995,
+          "naive_tokens": 20761,
+          "search_ms": 14.65,
+          "context_ms": 41.56
+        },
+        {
+          "query": "parse architecture decision records status context consequences",
+          "expected": [
+            "promapkin/extract/docs_ext.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.043,
+          "context_tokens": 1973,
+          "naive_tokens": 74066,
+          "search_ms": 16.91,
+          "context_ms": 41.28
+        },
+        {
+          "query": "find the most trustworthy path between two code elements",
+          "expected": [
+            "promapkin/graph.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.056,
+          "context_tokens": 1911,
+          "naive_tokens": 65028,
+          "search_ms": 18.07,
+          "context_ms": 41.41
+        },
+        {
+          "query": "strongly connected components of module imports",
+          "expected": [
+            "promapkin/graph.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.1,
+          "context_tokens": 1978,
+          "naive_tokens": 49366,
+          "search_ms": 16.77,
+          "context_ms": 44.42
+        },
+        {
+          "query": "log what is sent to a hosted language model",
+          "expected": [
+            "promapkin/agents/providers.py"
+          ],
+          "rank": 4,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.25,
+          "context_hit": 1,
+          "context_precision": 0.048,
+          "context_tokens": 1833,
+          "naive_tokens": 54768,
+          "search_ms": 18.14,
+          "context_ms": 44.06
+        },
+        {
+          "query": "score how risky a function is to change",
+          "expected": [
+            "promapkin/agents/specialists.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.067,
+          "context_tokens": 1971,
+          "naive_tokens": 32169,
+          "search_ms": 16.76,
+          "context_ms": 36.61
+        },
+        {
+          "query": "probabilistic text classifier trained on seed examples",
+          "expected": [
+            "promapkin/ml/classify.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.067,
+          "context_tokens": 1959,
+          "naive_tokens": 38528,
+          "search_ms": 17.32,
+          "context_ms": 41.5
+        },
+        {
+          "query": "draw the layered architecture as a mermaid flowchart",
+          "expected": [
+            "promapkin/blueprint.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.143,
+          "context_tokens": 1834,
+          "naive_tokens": 34366,
+          "search_ms": 19.07,
+          "context_ms": 46.44
+        },
+        {
+          "query": "compare the same coding agent with and without context on identical tasks",
+          "expected": [
+            "promapkin/bench.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.111,
+          "context_tokens": 1929,
+          "naive_tokens": 80523,
+          "search_ms": 24.48,
+          "context_ms": 46.95
+        },
+        {
+          "query": "link a call expression to the function it refers to via imports",
+          "expected": [
+            "promapkin/scanner.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.042,
+          "context_tokens": 1998,
+          "naive_tokens": 31095,
+          "search_ms": 18.69,
+          "context_ms": 39.29
+        },
+        {
+          "query": "read npm and pypi dependency declarations",
+          "expected": [
+            "promapkin/extract/manifest_ext.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1968,
+          "naive_tokens": 224994,
+          "search_ms": 19.12,
+          "context_ms": 37.94
+        },
+        {
+          "query": "nearest vectors by cosine similarity",
+          "expected": [
+            "promapkin/ml/embedders.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.083,
+          "context_tokens": 1993,
+          "naive_tokens": 7597,
+          "search_ms": 21.29,
+          "context_ms": 46.91
+        }
+      ]
+    },
+    "heuristic": {
+      "evaluated": 20,
+      "recall@5": 0.85,
+      "recall@10": 0.85,
+      "mrr": 0.689,
+      "context_hit_rate": 0.9,
+      "mean_context_tokens": 1949.8,
+      "mean_naive_exploration_tokens": 72779.0,
+      "token_reduction_vs_naive": 0.973,
+      "token_reduction_vs_whole_repo": 0.992,
+      "mean_search_ms": 4.37,
+      "mean_context_ms": 24.75,
+      "mode": "heuristic",
+      "rows": [
+        {
+          "query": "where are design patterns like strategy or adapter detected",
+          "expected": [
+            "promapkin/agents/specialists.py",
+            "promapkin/ml/classify.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.118,
+          "context_tokens": 1975,
+          "naive_tokens": 37834,
+          "search_ms": 4.06,
+          "context_ms": 27.89
+        },
+        {
+          "query": "how does the server refuse to read files outside the repository",
+          "expected": [
+            "promapkin/security.py"
+          ],
+          "rank": 4,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.25,
+          "context_hit": 1,
+          "context_precision": 0.059,
+          "context_tokens": 1998,
+          "naive_tokens": 160107,
+          "search_ms": 6.28,
+          "context_ms": 38.07
+        },
+        {
+          "query": "what happens when two agents update the same task record at once",
+          "expected": [
+            "promapkin/handoff.py"
+          ],
+          "rank": 5,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.2,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1915,
+          "naive_tokens": 92754,
+          "search_ms": 6.26,
+          "context_ms": 23.68
+        },
+        {
+          "query": "smoothing embeddings over neighbouring nodes in the graph",
+          "expected": [
+            "promapkin/ml/graph_ml.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.05,
+          "context_tokens": 1999,
+          "naive_tokens": 74069,
+          "search_ms": 4.31,
+          "context_ms": 26.13
+        },
+        {
+          "query": "fit facts into a limited number of tokens without dropping constraints",
+          "expected": [
+            "promapkin/retrieval.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.05,
+          "context_tokens": 1972,
+          "naive_tokens": 49767,
+          "search_ms": 4.73,
+          "context_ms": 22.24
+        },
+        {
+          "query": "ask the user before downloading a model",
+          "expected": [
+            "promapkin/ml/models.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.059,
+          "context_tokens": 1956,
+          "naive_tokens": 90944,
+          "search_ms": 3.65,
+          "context_ms": 21.53
+        },
+        {
+          "query": "detect express style http routes in typescript",
+          "expected": [
+            "promapkin/extract/js_ext.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.048,
+          "context_tokens": 1986,
+          "naive_tokens": 129893,
+          "search_ms": 3.38,
+          "context_ms": 21.39
+        },
+        {
+          "query": "mark agent conclusions as outdated after source files change",
+          "expected": [
+            "promapkin/maintenance.py",
+            "promapkin/scanner.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.105,
+          "context_tokens": 1993,
+          "naive_tokens": 106951,
+          "search_ms": 4.04,
+          "context_ms": 24.09
+        },
+        {
+          "query": "json rpc message loop over standard input",
+          "expected": [
+            "promapkin/mcp_server.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.111,
+          "context_tokens": 1990,
+          "naive_tokens": 20761,
+          "search_ms": 4.21,
+          "context_ms": 26.8
+        },
+        {
+          "query": "parse architecture decision records status context consequences",
+          "expected": [
+            "promapkin/extract/docs_ext.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.048,
+          "context_tokens": 1911,
+          "naive_tokens": 74066,
+          "search_ms": 3.72,
+          "context_ms": 22.39
+        },
+        {
+          "query": "find the most trustworthy path between two code elements",
+          "expected": [
+            "promapkin/graph.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.059,
+          "context_tokens": 1938,
+          "naive_tokens": 65028,
+          "search_ms": 4.37,
+          "context_ms": 25.89
+        },
+        {
+          "query": "strongly connected components of module imports",
+          "expected": [
+            "promapkin/graph.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.1,
+          "context_tokens": 1987,
+          "naive_tokens": 49366,
+          "search_ms": 3.7,
+          "context_ms": 21.57
+        },
+        {
+          "query": "log what is sent to a hosted language model",
+          "expected": [
+            "promapkin/agents/providers.py"
+          ],
+          "rank": 3,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.3333333333333333,
+          "context_hit": 1,
+          "context_precision": 0.056,
+          "context_tokens": 1969,
+          "naive_tokens": 54768,
+          "search_ms": 3.91,
+          "context_ms": 22.51
+        },
+        {
+          "query": "score how risky a function is to change",
+          "expected": [
+            "promapkin/agents/specialists.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.059,
+          "context_tokens": 1960,
+          "naive_tokens": 32169,
+          "search_ms": 3.5,
+          "context_ms": 22.67
+        },
+        {
+          "query": "probabilistic text classifier trained on seed examples",
+          "expected": [
+            "promapkin/ml/classify.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.062,
+          "context_tokens": 1967,
+          "naive_tokens": 38528,
+          "search_ms": 4.22,
+          "context_ms": 24.24
+        },
+        {
+          "query": "draw the layered architecture as a mermaid flowchart",
+          "expected": [
+            "promapkin/blueprint.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.143,
+          "context_tokens": 1942,
+          "naive_tokens": 34366,
+          "search_ms": 4.12,
+          "context_ms": 23.69
+        },
+        {
+          "query": "compare the same coding agent with and without context on identical tasks",
+          "expected": [
+            "promapkin/bench.py"
+          ],
+          "rank": 1,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 1.0,
+          "context_hit": 1,
+          "context_precision": 0.077,
+          "context_tokens": 1631,
+          "naive_tokens": 80523,
+          "search_ms": 5.46,
+          "context_ms": 25.0
+        },
+        {
+          "query": "link a call expression to the function it refers to via imports",
+          "expected": [
+            "promapkin/scanner.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 1,
+          "context_precision": 0.042,
+          "context_tokens": 1993,
+          "naive_tokens": 31095,
+          "search_ms": 4.34,
+          "context_ms": 24.28
+        },
+        {
+          "query": "read npm and pypi dependency declarations",
+          "expected": [
+            "promapkin/extract/manifest_ext.py"
+          ],
+          "rank": null,
+          "recall@5": 0,
+          "recall@10": 0,
+          "mrr": 0.0,
+          "context_hit": 0,
+          "context_precision": 0.0,
+          "context_tokens": 1922,
+          "naive_tokens": 224994,
+          "search_ms": 5.33,
+          "context_ms": 26.46
+        },
+        {
+          "query": "nearest vectors by cosine similarity",
+          "expected": [
+            "promapkin/ml/embedders.py"
+          ],
+          "rank": 2,
+          "recall@5": 1,
+          "recall@10": 1,
+          "mrr": 0.5,
+          "context_hit": 1,
+          "context_precision": 0.083,
+          "context_tokens": 1992,
+          "naive_tokens": 7597,
+          "search_ms": 3.83,
+          "context_ms": 24.57
+        }
+      ]
+    }
+  },
+  "notes": [
+    "naive_tokens: tokens read by an agent opening files ranked by query-term hits until every expected file is read (lower bound on blind exploration).",
+    "Self-supervised queries test semantic retrieval; supply a spec with real tasks for an end-to-end measurement (see agent_benchmark)."
+  ]
+}
