@@ -25,7 +25,7 @@ from typing import Any, Callable
 from promapkin import evidence as ev
 from promapkin import gitutil
 from promapkin.config import Workspace
-from promapkin.extract import Facts, extractor_for, is_generated, is_test_path, language_of
+from promapkin.extract import SNIFF, Facts, extractor_for, is_generated, is_test_path, language_of
 from promapkin.security import MAX_FILE_BYTES, is_probably_binary
 from promapkin.store import Store
 
@@ -88,6 +88,8 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
                 continue
             if is_probably_binary(data):
                 continue
+            if lang in SNIFF:   # shared extensions (.m: Objective-C or MATLAB; .v: Verilog or V)
+                lang = language_of(rel, data[:4000].decode("utf-8", "replace"))
             contents[rel] = (gitutil.sha_of(data), lang, len(data))
         changed = [p for p, (sha, _, _) in contents.items() if full or old.get(p) != sha]
         deleted = [p for p in old if p not in contents]

@@ -45,6 +45,91 @@ PATTERNS: dict[str, dict[str, str]] = {
               "func": r"^\s*(?:(?:override|private|protected)\s+)*def\s+(?P<name>\w+)",
               "import": r"^\s*import\s+(?P<target>[\w.]+)"},
 }
+_IMPORT = r"^\s*(?:import|use|using|require|include|open|from|library|source|uses)\b[\s(]*['\"<]?(?P<target>[\w./:@-]+)"
+GENERIC = {"class": r"^\s*(?:(?:pub|export|public|abstract|final|data)\s+)*(?:class|struct|module|interface|trait|"
+                    r"contract|protocol|object|record|type)\s+(?P<name>[A-Za-z_][\w.]*)",
+           "func": r"^\s*(?:(?:pub|export|public|private|static|async|local|inline)\s+)*(?:def|defp|fn|func|function|"
+                   r"proc|sub|procedure|subroutine|method|fun)\s+(?:\([^)]*\)\s*)?(?P<name>[A-Za-z_][\w.!?]*)",
+           "import": _IMPORT}
+PATTERNS.update({
+    "dart": {"class": r"^\s*(?:abstract\s+)?(?:class|mixin|enum|extension)\s+(?P<name>\w+)",
+             "func": r"^\s*(?:static\s+)?(?:[\w<>?,\[\]]+\s+)?(?P<name>[a-z_]\w*)\s*\([^;]*\)\s*(?:async\s*)?\{",
+             "import": r"^\s*import\s+['\"](?P<target>[^'\"]+)"},
+    "lua": {"class": r"^\s*local\s+(?P<name>[A-Z]\w*)\s*=\s*\{\s*\}",
+            "func": r"^\s*(?:local\s+)?function\s+(?:(?P<cls>\w+)[.:])?(?P<name>\w+)",
+            "import": r"require\s*\(?\s*['\"](?P<target>[^'\"]+)"},
+    "elixir": {"class": r"^\s*defmodule\s+(?P<name>[\w.]+)", "func": r"^\s*defp?\s+(?P<name>\w+[?!]?)",
+               "import": r"^\s*(?:alias|import|require|use)\s+(?P<target>[\w.]+)"},
+    "erlang": {"class": r"^-module\((?P<name>\w+)\)", "func": r"^(?P<name>[a-z]\w*)\(.*\)\s*(?:when.*)?->",
+               "import": r"^-(?:import|include(?:_lib)?)\(\s*\"?(?P<target>[\w./]+)"},
+    "haskell": {"class": r"^(?:data|newtype|class|type)\s+(?P<name>[A-Z]\w*)",
+                "func": r"^(?P<name>[a-z_]\w*)\s+[^:=]*=(?!=)", "import": r"^import\s+(?:qualified\s+)?(?P<target>[\w.]+)"},
+    "ocaml": {"class": r"^\s*(?:module|type)\s+(?P<name>\w+)", "func": r"^\s*let\s+(?:rec\s+)?(?P<name>[a-z_]\w*)",
+              "import": r"^\s*open\s+(?P<target>[\w.]+)"},
+    "fsharp": {"class": r"^\s*(?:type|module)\s+(?P<name>\w+)",
+               "func": r"^\s*(?:let|member\s+\w+\.)\s*(?:rec\s+)?(?P<name>\w+)", "import": r"^\s*open\s+(?P<target>[\w.]+)"},
+    "clojure": {"class": r"^\(\s*(?:defrecord|deftype|defprotocol|ns)\s+(?P<name>[\w.*+!?-]+)",
+                "func": r"^\(\s*(?:defn-?|defmacro)\s+(?P<name>[\w*+!?<>-]+)",
+                "import": r"\(:require\s+\[(?P<target>[\w.-]+)"},
+    "r": {"class": r"^\s*(?P<name>\w+)\s*<-\s*(?:setRefClass|R6Class)\(",
+          "func": r"^\s*(?P<name>[\w.]+)\s*(?:<-|=)\s*function\s*\(",
+          "import": r"^\s*(?:library|require|source)\(\s*['\"]?(?P<target>[\w./-]+)"},
+    "julia": {"class": r"^\s*(?:mutable\s+)?(?:struct|module|abstract\s+type)\s+(?P<name>\w+)",
+              "func": r"^\s*(?:function\s+(?P<name>[\w.!]+)|(?P<name2>[\w!]+)\(.*\)\s*=(?!=))",
+              "import": r"^\s*(?:using|import)\s+(?P<target>[\w.]+)"},
+    "perl": {"class": r"^\s*package\s+(?P<name>[\w:]+)", "func": r"^\s*sub\s+(?P<name>\w+)",
+             "import": r"^\s*(?:use|require)\s+(?P<target>[\w:]+)"},
+    "bash": {"class": r"(?!x)x", "func": r"^\s*(?:function\s+)?(?P<name>[\w-]+)\s*\(\)\s*\{?|^\s*function\s+(?P<name2>[\w-]+)",
+             "import": r"^\s*(?:source|\.)\s+(?P<target>[\w./${}-]+)"},
+    "powershell": {"class": r"^\s*class\s+(?P<name>\w+)", "func": r"^\s*function\s+(?P<name>[\w-]+)",
+                   "import": r"^\s*(?:Import-Module|using\s+module)\s+(?P<target>[\w./-]+)"},
+    "zig": {"class": r"^\s*(?:pub\s+)?const\s+(?P<name>\w+)\s*=\s*(?:packed\s+|extern\s+)?(?:struct|enum|union)\b",
+            "func": r"^\s*(?:pub\s+)?(?:export\s+)?fn\s+(?P<name>\w+)",
+            "import": r"@import\(\"(?P<target>[^\"]+)\"\)"},
+    "nim": {"class": r"^\s*(?:type\s+)?(?P<name>[A-Z]\w*)\*?\s*=\s*(?:ref\s+)?object",
+            "func": r"^\s*(?:proc|func|method|iterator|template|macro)\s+(?P<name>\w+)",
+            "import": r"^\s*(?:import|include|from)\s+(?P<target>[\w/]+)"},
+    "objc": {"class": r"^\s*@(?:interface|implementation|protocol)\s+(?P<name>\w+)",
+             "func": r"^\s*[-+]\s*\([^)]*\)\s*(?P<name>\w+)", "import": r"^\s*#(?:import|include)\s+[\"<](?P<target>[^\">]+)"},
+    "groovy": {"class": r"^\s*(?:(?:public|abstract|final)\s+)*(?:class|interface|trait|enum)\s+(?P<name>\w+)",
+               "func": r"^\s*(?:(?:public|private|protected|static|def)\s+)+(?:[\w<>\[\]]+\s+)?(?P<name>\w+)\s*\(",
+               "import": r"^\s*import\s+(?:static\s+)?(?P<target>[\w.]+)"},
+    "elm": {"class": r"^type\s+(?:alias\s+)?(?P<name>[A-Z]\w*)", "func": r"^(?P<name>[a-z]\w*)\s[^:]*=(?!=)",
+            "import": r"^import\s+(?P<target>[\w.]+)"},
+    "solidity": {"class": r"^\s*(?:abstract\s+)?(?:contract|interface|library|struct)\s+(?P<name>\w+)",
+                 "func": r"^\s*(?:function|modifier)\s+(?P<name>\w+)", "import": r"^\s*import\s+[\"'](?P<target>[^\"']+)"},
+    "crystal": PATTERNS["ruby"],
+    "d": {"class": r"^\s*(?:class|struct|interface)\s+(?P<name>\w+)",
+          "func": r"^\s*(?:[\w\[\]!*]+\s+)+(?P<name>[a-z_]\w*)\s*\([^;]*\)\s*\{?$", "import": r"^\s*import\s+(?P<target>[\w.]+)"},
+    "fortran": {"class": r"^\s*(?:module|program)\s+(?!procedure)(?P<name>\w+)",
+                "func": r"^\s*(?:(?:pure|elemental|recursive)\s+)*(?:subroutine|(?:[\w()*]+\s+)?function)\s+(?P<name>\w+)",
+                "import": r"^\s*use\s+(?P<target>\w+)"},
+    "pascal": {"class": r"^\s*(?P<name>T\w+)\s*=\s*(?:class|record|object|interface)",
+               "func": r"^\s*(?:procedure|function|constructor|destructor)\s+(?:(?P<cls>\w+)\.)?(?P<name>\w+)",
+               "import": r"^\s*uses\s+(?P<target>[\w.]+)"},
+    "matlab": {"class": r"^\s*classdef\s+(?:\([^)]*\)\s*)?(?P<name>\w+)",
+               "func": r"^\s*function\s+(?:\[?[\w,\s]*\]?\s*=\s*)?(?P<name>\w+)", "import": r"^\s*import\s+(?P<target>[\w.*]+)"},
+    "verilog": {"class": r"^\s*(?:module|interface|package)\s+(?P<name>\w+)",
+                "func": r"^\s*(?:function|task)\s+(?:automatic\s+)?(?:[\w\[\]:]+\s+)?(?P<name>\w+)\s*[;(]",
+                "import": r"^\s*`include\s+\"(?P<target>[^\"]+)"},
+    "vhdl": {"class": r"^\s*(?:entity|architecture|package)\s+(?P<name>\w+)",
+             "func": r"^\s*(?:function|procedure)\s+(?P<name>\w+)", "import": r"^\s*use\s+(?P<target>[\w.]+)"},
+    "gleam": {"class": r"^\s*(?:pub\s+)?type\s+(?P<name>\w+)", "func": r"^\s*(?:pub\s+)?fn\s+(?P<name>\w+)",
+              "import": r"^\s*import\s+(?P<target>[\w/]+)"},
+    "odin": {"class": r"^\s*(?P<name>\w+)\s*::\s*struct", "func": r"^\s*(?P<name>\w+)\s*::\s*proc",
+             "import": r"^\s*import\s+(?:\w+\s+)?\"(?P<target>[^\"]+)"},
+    "v": {"class": r"^\s*(?:pub\s+)?(?:struct|interface)\s+(?P<name>\w+)",
+          "func": r"^\s*(?:pub\s+)?fn\s+(?:\(\s*\w+\s+&?(?:mut\s+)?(?P<cls>\w+)\s*\)\s*)?(?P<name>\w+)",
+          "import": r"^\s*import\s+(?P<target>[\w.]+)"},
+    "commonlisp": {"class": r"^\(\s*(?:defclass|defstruct|defpackage)\s+:?(?P<name>[\w*+!?<>-]+)",
+                   "func": r"^\(\s*(?:defun|defmacro|defmethod|defgeneric)\s+(?P<name>[\w*+!?<>-]+)",
+                   "import": r"\(\s*(?:require|ql:quickload)\s+[:'\"]?(?P<target>[\w-]+)"},
+    "scheme": {"class": r"^\(\s*(?:define-record-type|define-module)\s+\(?(?P<name>[\w*+!?<>-]+)",
+               "func": r"^\(\s*define\s+\((?P<name>[\w*+!?<>-]+)", "import": r"^\(\s*(?:import|use-modules)\s+\(?(?P<target>[\w ()-]+?)\)"},
+    "racket": {"class": r"^\(\s*struct\s+(?P<name>[\w*+!?<>-]+)", "func": r"^\(\s*define\s+\((?P<name>[\w*+!?<>-]+)",
+               "import": r"^\(\s*require\s+(?P<target>[\w/-]+)"},
+    "cuda": PATTERNS["cpp"], "glsl": PATTERNS["c"], "hlsl": PATTERNS["c"], "apex": PATTERNS["java"],
+})
 CALL_RE = re.compile(r"(?<![\w$.])((?:[A-Za-z_$][\w$]*(?:\.|::|->))*[A-Za-z_$][\w$]*)\s*\(")
 DEF_KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "match", "when", "else", "elif"}
 KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "func", "fn", "def", "function", "new", "sizeof",
@@ -53,7 +138,7 @@ KEYWORDS = {"if", "for", "while", "switch", "catch", "return", "func", "fn", "de
 
 def extract(path: str, text: str, language: str) -> Facts:
     f = Facts(path, language)
-    pats = {k: re.compile(v, re.M) for k, v in PATTERNS[language].items()}
+    pats = {k: re.compile(v, re.M) for k, v in PATTERNS.get(language, GENERIC).items()}
     mod = module_name(path)
     mod_id = f"module:{mod}"
     is_test = is_test_path(path)
@@ -72,7 +157,7 @@ def extract(path: str, text: str, language: str) -> Facts:
     for m in pats["class"].finditer(text):
         defs.append((line_of(m.start()), "class", m.group("name"), None))
     for m in pats["func"].finditer(text):
-        name = m.group("name")
+        name = m.group("name") or m.groupdict().get("name2")
         if name in DEF_KEYWORDS:
             continue
         defs.append((line_of(m.start()), "function", name, m.groupdict().get("cls")))

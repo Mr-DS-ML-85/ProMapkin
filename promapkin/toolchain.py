@@ -63,8 +63,29 @@ def status(repo_root: Path | None = None) -> dict:
         "javascript_typescript": "typescript-compiler" if ts_mod and node_binary() else "lexical",
         "tree_sitter": tree_sitter_available(),
         "other_languages": "tree-sitter" if tree_sitter_available() else "lexical",
+        "tree_sitter_languages": sorted(grammar_names()),
         "cache_dir": str(cache_dir()),
     }
+
+
+def grammar_names() -> dict[str, str]:
+    """Language -> tree-sitter grammar for every language Promapkin parses with tree-sitter."""
+    from promapkin.extract import treesitter_ext, treesitter_generic
+    return {**{k: v.grammar for k, v in treesitter_ext.SPECS.items()},
+            **{k: v.grammar for k, v in treesitter_generic.SPECS.items()}}
+
+
+def prefetch_grammars() -> tuple[list[str], list[str]]:
+    """Load (and, for language packs that download on demand, fetch) every grammar now rather than mid-scan."""
+    from tree_sitter_language_pack import get_parser
+    ready, failed = [], []
+    for lang, grammar in sorted(grammar_names().items()):
+        try:
+            get_parser(grammar)
+            ready.append(lang)
+        except Exception:  # noqa: BLE001 - offline or grammar missing from this pack version
+            failed.append(lang)
+    return ready, failed
 
 
 def install_typescript(version: str = "5") -> tuple[bool, str]:
@@ -88,4 +109,8 @@ def install_tree_sitter() -> tuple[bool, str]:
     importlib.invalidate_caches()
     if proc.returncode != 0 or not tree_sitter_available():
         return False, f"pip install failed: {proc.stderr.strip()[-400:]}"
+    ready, failed = prefetch_grammars()
+    if failed:
+        return True, (f"tree-sitter installed; {len(ready)} grammars ready, {len(failed)} could not be downloaded "
+                      f"({', '.join(failed[:8])}); those languages use the lexical fallback")
     return True, "tree-sitter grammars installed"

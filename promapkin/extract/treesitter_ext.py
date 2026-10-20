@@ -59,6 +59,12 @@ SPECS: dict[str, Spec] = {
                   {"function_definition", "function_declaration"}, {"import_declaration"}, {"call_expression"},
                   {"instance_expression"}, {"extends_clause"}),
 }
+SPECS["cuda"] = Spec("cuda", SPECS["cpp"].classes, SPECS["cpp"].funcs, SPECS["cpp"].imports, SPECS["cpp"].calls,
+                     SPECS["cpp"].news, SPECS["cpp"].inherit)
+SPECS["glsl"] = Spec("glsl", {"struct_specifier"}, {"function_definition"}, {"preproc_include"}, {"call_expression"})
+SPECS["hlsl"] = Spec("hlsl", {"struct_specifier"}, {"function_definition"}, {"preproc_include"}, {"call_expression"})
+SPECS["apex"] = Spec("apex", SPECS["java"].classes | {"trigger_declaration"}, SPECS["java"].funcs, set(),
+                     SPECS["java"].calls, SPECS["java"].news, {"superclass", "interfaces"})
 TEST_FUNC = re.compile(r"^(test|Test)|_test$|Test$")
 IDENT_CHAIN = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
 _parsers: dict[str, Any] = {}
@@ -129,8 +135,9 @@ def extract(path: str, text: str, language: str) -> Facts:
     mod = module_name(path)
     mod_id = f"module:{mod}"
     is_test = is_test_path(path)
+    parser = _parser(spec.grammar)   # a grammar that cannot load propagates: the caller falls back to lexical
     try:
-        tree = _parser(spec.grammar).parse(text.encode("utf-8"))
+        tree = parser.parse(text.encode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         facts.errors.append(f"tree-sitter parse failed: {exc}")
         return facts
@@ -155,7 +162,8 @@ def _leading_comment(text: str) -> str | None:
 
 def _is_entry(language: str, text: str, path: str) -> bool:
     return bool(
-        (language == "go" and re.search(r"^package main\b", text, re.M) and "func main(" in text)
+        (language in ("cuda", "glsl", "hlsl") and re.search(r"\bvoid\s+main\s*\(|\bint\s+main\s*\(", text))
+        or (language == "go" and re.search(r"^package main\b", text, re.M) and "func main(" in text)
         or (language == "rust" and PurePosixPath(path).name == "main.rs")
         or (language in ("java", "kotlin", "scala", "csharp") and re.search(r"\b(static\s+void\s+[Mm]ain|fun main|def main)\b", text))
         or (language in ("c", "cpp") and re.search(r"\bint\s+main\s*\(", text))
@@ -208,7 +216,7 @@ class _Walker:
             self.walk(c, scope)
 
     def _has_body(self, node: Any) -> bool:
-        if self.lang in ("c", "cpp") and node.type == "struct_specifier":
+        if self.lang in ("c", "cpp", "cuda", "glsl", "hlsl") and node.type == "struct_specifier":
             return any(c.type == "field_declaration_list" for c in node.children)
         return True
 
