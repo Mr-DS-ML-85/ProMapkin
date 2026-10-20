@@ -876,6 +876,20 @@ def _doctor(ws: Workspace) -> dict[str, Any]:
             optional=True)
     add("numpy (fast vector math)", importlib.util.find_spec("numpy") is not None, "optional speed-up",
         optional=True)
+    add("PDF text (pypdf)", importlib.util.find_spec("pypdf") is not None,
+        "installed" if importlib.util.find_spec("pypdf") else "built-in reader (pip install 'promapkin[assets]')",
+        optional=True)
+    add("YAML (PyYAML)", importlib.util.find_spec("yaml") is not None,
+        "installed" if importlib.util.find_spec("yaml") else "built-in subset parser (pip install 'promapkin[yaml]')",
+        optional=True)
+    ocr = importlib.util.find_spec("pytesseract") is not None and bool(_sh.which("tesseract"))
+    add("image OCR", ocr, "pytesseract + tesseract" if ocr else "off (pip install pytesseract pillow; install "
+        "tesseract); --llm describes images instead", optional=True)
+    if ws.initialized:
+        from promapkin import installer
+        found = installer.detect(ws.root)
+        add("coding assistants", True, ", ".join(found) + " detected (promapkin install --detected)" if found
+            else "none detected (promapkin install --list)", optional=True)
     return {"checks": checks}
 
 

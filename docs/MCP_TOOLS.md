@@ -1,12 +1,15 @@
 # MCP tool reference
 
-Generated from `promapkin/mcp_server.py` (`promapkin mcp inspect --json` prints the same data with full schemas).
+Generated from `promapkin/mcp_server.py` by `scripts/gen_mcp_docs.py` (`promapkin mcp inspect --json` prints the same data with full schemas).
 
 R = read-only, W = writes shared knowledge or artifacts (validated, append-only, provenance recorded).
+
+56 tools.
 
 | Tool | | Arguments | Description |
 |---|---|---|---|
 | `get_index_status` | R | — | Revision, freshness (pending file changes), counts, handoffs, queued agent tasks and ML tier of the Promapkin index. |
+| `get_session_brief` | R | max_chars | Compact orientation for the start of a session: index freshness, languages, architecture, subsystems, entry points, infrastructure, most depended-on symbols, open handoffs and their constraints (about 1k tokens). |
 | `scan_repository` | W | full | Index the repository (incremental by default; full=true re-extracts everything). Never executes repository code. |
 | `sync_repository` | W | — | Incremental re-analysis: rescan changed files and re-run only the affected blueprint specialists. |
 | `verify_index` | W | — | Stale-claim detection: index freshness, agent/handoff knowledge whose sources changed, documentation contradictions, dangling references, integrity. |
@@ -19,7 +22,10 @@ R = read-only, W = writes shared knowledge or artifacts (validated, append-only,
 | `get_risk_register` | R | — | Risky symbols (fan-in, complexity, untested, writes, churn), structural risks, open TODO/warning notes. |
 | `plan_implementation` | W | **goal** | Design engine: dependency-aware implementation roadmap for a goal with prerequisites, affected components, constraints, test plan, migration steps and risk assessment. |
 | `run_specialist` | W | **specialist**, goal | Run one specialist agent (reconnaissance, architecture, dataflow, api, patterns, decisions, risks, verification, roadmap) over its bounded scope and return its structured section. |
-| `render_diagram` | R | **kind**, focus, depth | Mermaid source for architecture / dataflow / patterns / roadmap / neighborhood (focus) / dependencies / map (focus=map id). Dotted edges = inferred evidence. |
+| `get_infrastructure` | R | — | Deployables (containers, Compose services, Kubernetes workloads) with the code they run, what routes to them and the config they set; ingress; Terraform resources by category with their dependencies; CI pipelines; and the configuration surface (keys read by code but never declared, and the reverse). |
+| `list_assets` | R | media, limit | PDFs, Word/PowerPoint files, images and videos in the repository: pages, dimensions, duration, extracted text availability, image descriptions (--llm), which docs reference them and which code they mention. Their text is searchable with search_graph. |
+| `get_data_model` | R | — | Tables and views (columns, keys, foreign keys), ORM classes mapped to them, the symbols that read and write each table, migrations, GraphQL/protobuf/OpenAPI schema types, endpoints by protocol, and API-spec coverage (spec operations without code, code endpoints missing from the spec). |
+| `render_diagram` | R | **kind**, focus, depth | Mermaid source for architecture / dataflow / patterns / roadmap / neighborhood (focus) / dependencies / map (focus=map id) / infrastructure / er (entity-relationship). Dotted edges = inferred evidence. |
 | `search_graph` | R | **query**, limit, kinds | Hybrid search (symbol lookup + BM25 + semantic embeddings + graph) for symbols, endpoints, docs, decisions, findings. |
 | `get_node` | R | **node**, limit | One graph node with provenance and its incoming/outgoing relationships, each with evidence class and trust. |
 | `get_neighbors` | R | **node**, direction, types, depth, min_trust, limit | Neighbourhood of a node, filtered by relationship types and minimum evidence trust. |

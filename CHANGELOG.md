@@ -1,6 +1,62 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+### Added
+- **50 languages.** Tree-sitter extraction for 35 more:
+  - functional: Elixir, Erlang, Haskell, OCaml, F#, Clojure, Common Lisp, Scheme, Racket, Elm, Gleam;
+  - systems: Zig, Nim, D, Odin, V, Objective-C;
+  - scripting and data: Dart, Lua, R, Julia, Perl, Bash, PowerShell, Crystal;
+  - hardware and GPU: Verilog, VHDL, CUDA, GLSL, HLSL;
+  - other: Solidity, Fortran, Pascal, MATLAB, Apex.
+
+  Also Groovy (lexical) and Vue/Svelte single-file components. New languages are declarative specs; a grammar
+  that cannot load falls back to lexical extraction per file, and `parsers install` pre-downloads all grammars.
+- **`promapkin install` for 19 coding assistants:** Claude Code, Codex, Gemini CLI, OpenCode, VS Code/Copilot,
+  Cursor, Windsurf, Cline, Roo Code, Kiro, Zed, Continue, Amazon Q, Junie, Goose, Crush, Augment, Trae and
+  `AGENTS.md`.
+  - What it writes: MCP registration, instructions, and where supported, hooks, skills and slash commands.
+  - Changes are merge-safe and recorded; `--dry-run` previews them and `promapkin uninstall` restores the files.
+- **`promapkin brief`** and the MCP tool `get_session_brief`: a compact factual orientation used by
+  session-start hooks.
+- **Infrastructure and schemas as graph nodes**, linked to code:
+  - formats: Dockerfile, Docker Compose, Kubernetes (including Helm templates), Terraform, GitHub Actions and
+    GitLab CI, OpenAPI, SQL DDL, Prisma, GraphQL and protobuf;
+  - links: what each container, workload or CI job runs; config keys shared between infrastructure and the
+    code that reads them; Service→workload by selector; Ingress→Service; Terraform references; spec→endpoint;
+  - views: `graph infra`, `graph schema`, diagrams `infrastructure` and `er`, MCP `get_infrastructure` and
+    `get_data_model`, and Infrastructure and Data model sections in the architecture blueprint.
+- **Code→data links in any language:** SQL in string literals (reads and writes per function), ORM mappings
+  (SQLAlchemy, Django, TypeORM, JPA, Sequelize, GORM, ActiveRecord, Diesel), Prisma client calls and
+  migrations. Data flow now ends at tables and cloud resources.
+- **Assets:**
+  - PDF text (built in; pypdf when installed), Word and PowerPoint text, image dimensions and SVG text;
+  - optional OCR, and `--llm` vision descriptions of diagrams whose drawn arrows become claims;
+  - video duration;
+  - extracted text is searchable and linked to the code it mentions;
+  - `graph assets`, MCP `list_assets`.
+- **Published retrieval benchmark** on fastapi, clap and Promapkin itself: hand-written specs and raw results in
+  `examples/bench/`, write-up in docs/BENCHMARK.md.
+- **New `graph.html`:**
+  - shows infrastructure, data and asset nodes;
+  - shapes by category;
+  - legend toggles;
+  - directed, colour-coded edges;
+  - 1–2 hop focus;
+  - search suggestions;
+  - edge-type filter;
+  - theme toggle;
+  - PNG export.
+- `doctor` reports pypdf, PyYAML, OCR and detected assistants. New extras: `assets` (pypdf) and `yaml` (PyYAML).
+- `scripts/gen_mcp_docs.py` regenerates docs/MCP_TOOLS.md, which now lists 56 tools.
+
+### Changed
+- Retrieval down-weights tests, examples and vendored code unless the question asks for them. Documentation
+  sections that match a question pass their score to the code they reference. On fastapi, the share of context
+  packages containing a right file rose from 27% to 68%.
+- Tree-sitter doc comments are read in full, including across attributes and decorators (`#[cfg]`,
+  `@Annotation`). clap recall@10 went from 0.36 to 0.64.
+- Context packages are cached per retrieval version; `bench retrieval` never reads the cache.
 
 ### Fixed
 - `--llm` with OpenAI-compatible proxies that ignore `response_format` (for example OmniRoute's DeepSeek Web

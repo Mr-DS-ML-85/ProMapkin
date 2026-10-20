@@ -21,14 +21,23 @@ a task or picks up another agent's work.
   location and freshness. Evidence kinds include `ast`, `static_resolved`, `lexical`, `manifest`,
   `documentation`, `runtime`, `heuristic`, `ml_classifier`, `llm_extraction`, `llm_inference`, `name_match`,
   `agent_inference` and `handoff`. Traversal and retrieval rank results by that trust.
-- **Real parsers first.**
+- **Real parsers first, 50 languages.**
   - Python uses the AST.
-  - JS/TS uses the TypeScript compiler, including type-checked call resolution.
-  - Go, Rust, Java, C#, Kotlin, Ruby, PHP, C, C++, Swift and Scala use tree-sitter.
+  - JS/TS uses the TypeScript compiler, including type-checked call resolution. Vue and Svelte components go
+    through the same path.
+  - 46 more languages use tree-sitter, from Go, Rust, Java and C# to Elixir, Haskell, Zig, Solidity and Verilog.
   - Every language has a lexical fallback, so nothing is invisible.
+- **Beyond application code.**
+  - Infrastructure: Dockerfiles, Compose, Kubernetes, Terraform, CI and OpenAPI.
+  - Schemas: SQL, Prisma, GraphQL and protobuf.
+  - Assets: PDFs, Word and PowerPoint files, images and video.
+  - All of it is linked to the code it runs, configures, stores or describes.
 - **Static + dynamic.**
   - Reflection, dynamic imports, callbacks, DI, fixtures and event wiring are detected statically.
   - Opt-in runtime tracing (`trace run -- pytest`) adds the call edges only execution shows.
+- **One command per assistant.** `promapkin install --platform claude-code` (or Cursor, Copilot, Codex, Gemini, and
+  14 more) registers the MCP server and adds instructions, hooks and commands. Every change is merge-safe and
+  reversible.
 - **Local by default.** SQLite, zero required dependencies, no repository code executed by scanning. Models,
   parsers and LLMs are opt-in.
 
@@ -36,24 +45,28 @@ a task or picks up another agent's work.
 
 ```bash
 pip install -e .                          # core: zero dependencies
-pip install -e '.[all]'                   # + LLM SDKs, tree-sitter, embeddings, numpy
+pip install -e '.[all]'                   # + LLM SDKs, tree-sitter, embeddings, numpy, pypdf, PyYAML
 promapkin parsers install                 # optional: TypeScript compiler + tree-sitter grammars
 cd /path/to/repo
 promapkin init && promapkin scan          # incremental, transactional
+promapkin install --platform claude-code  # or --detected: MCP server, instructions, hooks, commands
 promapkin blueprint generate --goal "add rate limiting to the API"
 promapkin graph html                      # interactive, offline graph explorer
 promapkin doctor                          # what is enabled, what is missing
 ```
 
-Measured on real repositories (single core, no neural models; numpy installed):
+Measured on real repositories with hand-written developer questions (built-in ML tier, single core;
+[docs/BENCHMARK.md](docs/BENCHMARK.md)):
 
-| Repository | Files | Scan | Blueprint |
-|---|---|---|---|
-| fastapi/fastapi (Python) | 2,886 | 36 s (was 310 s in v0.1) | 3 s |
-| clap-rs/clap (Rust, tree-sitter) | 419 | 6 s | — |
-| clap-rs/clap (Rust, lexical fallback) | 419 | 17 s | — |
+| Repository | Files | Scan | Package contains a right file | recall@10 | Package tokens | Grep-and-read tokens |
+|---|---|---|---|---|---|---|
+| fastapi/fastapi (Python) | 3,155 | 44 s | 68% | 0.68 | 1.8k | 438k (242×) |
+| clap-rs/clap (Rust) | 482 | 8 s | 71% | 0.64 | 2.0k | 306k (157×) |
+| Promapkin (Python) | 114 | 3 s | 90% | 0.85 | 1.9k | 73k (37×) |
 
-Rescans only re-extract changed files and re-resolve the references those changes can affect.
+Grep-and-read is a simple baseline (open files ranked by matching words until the right ones are read), so the
+ratio is an upper bound on what an agent saves. Read it together with the hit rate. Rescans only re-extract
+changed files and re-resolve the references those changes can affect.
 
 ## What you get
 
@@ -62,7 +75,7 @@ Rescans only re-extract changed files and re-resolve the references those change
 | File | Contents |
 |---|---|
 | `00-reconnaissance.md` | languages, entry points, conventions, missing context, security notices |
-| `01-architecture.md` | subsystems, layers, dependencies, layer violations, integrations, style, semantic components |
+| `01-architecture.md` | subsystems, layers, dependencies, layer violations, integrations, style, semantic components, infrastructure, data model |
 | `02-dataflow.md` | entry point → sink flows (DB, HTTP, files, queues, config), static vs inferred steps |
 | `03-api-atlas.md` | endpoints, handlers, params, auth boundaries, public interfaces, packages, hotspots |
 | `04-patterns.md` | Strategy, Adapter, Repository, DI, Factory… with roles, confidence and classifier agreement |
@@ -70,7 +83,7 @@ Rescans only re-extract changed files and re-resolve the references those change
 | `06-risks.md` | risky symbols (fan-in, complexity, untested, writes, churn), structural risks, TODOs |
 | `07-verification.md` | documentation claims checked against code; contradictions; stale knowledge |
 | `08-roadmap.md` | dependency-ordered plan with prerequisites, tests, migrations, risks |
-| `diagrams/*.mmd`, `blueprint.json`, `AGENT_GUIDE.md`, `graph.html` | Mermaid sources, machine-readable blueprint, agent orientation, graph explorer |
+| `diagrams/*.mmd`, `blueprint.json`, `AGENT_GUIDE.md`, `graph.html` | Mermaid sources (including `infrastructure.mmd` and the `er.mmd` entity diagram), machine-readable blueprint, agent orientation, graph explorer |
 
 Each claim is tagged, for example `` `[observed · ast · 1.00]` (searchapp/api/routes.py:21) ``.
 
@@ -86,11 +99,17 @@ promapkin graph trace --from FastAPI --to APIRouter   # flow → structural → 
 promapkin graph dataflow "api:POST /items"            # entry point → sinks
 promapkin graph hubs | communities | surprises        # god nodes, module communities, rare cross-community links
 promapkin graph html                                  # self-contained interactive explorer
+promapkin graph infra                                 # deployables → code they run, routing, cloud resources, config
+promapkin graph schema                                # tables, keys, ORM classes, who reads/writes, API spec coverage
+promapkin graph assets [--media pdf|office|image|video]
 promapkin graph deps | node | neighbors | similar | source | diagram | map | relate | finding
 
 promapkin context build "optimize vector search" --budget 3000
 promapkin handoff create --task ... --finding "claim|path:line|verified" --constraint ... --next ...
 promapkin handoff resume <id> --claim | update | branch | list | show
+
+promapkin install --platform <assistant> | --detected | --list | --dry-run;  promapkin uninstall
+promapkin brief [--sync]                              # compact orientation (used by session-start hooks)
 
 promapkin trace run -- python -m pytest -q            # runtime evidence from YOUR command
 promapkin parsers status | install [typescript|tree-sitter]
@@ -154,6 +173,8 @@ With `--llm`:
 - Search gets query expansion and reranking.
 - Blueprint specialists get an LLM synthesis, and roadmaps get refined.
 - Query commands print an explanation of the result.
+- Images in the repository (diagrams, screenshots) are described by a vision model. Arrows drawn in a diagram
+  become claims linked to the code they name (`llm_images: false` turns this off).
 
 Safeguards:
 - Official `anthropic` and `openai` SDKs. OpenAI-compatible base URLs (vLLM, Ollama, LM Studio, gateways) work too.
@@ -174,12 +195,14 @@ promapkin mcp config                                  # paste into your agent's 
 claude mcp add promapkin -- python -m promapkin --root /path/to/repo mcp serve
 ```
 
-There are 52 tools. They cover:
-- **Index:** status, scan, sync, verify, overview, toolchain.
+There are 56 tools. They cover:
+- **Index:** status, session brief, scan, sync, verify, overview, toolchain.
 - **Design engine:** blueprint generation and sections, architecture, patterns, decisions, risks, implementation
   plans, specialist runs, diagrams.
 - **Graph read:** search, node, neighbours, structured query, trace, data flow, dependencies, impact, source,
   similar, hubs, communities, surprising connections, HTML export.
+- **Infrastructure and data:** deployables and routing, cloud resources, config surface, data model, API-spec
+  coverage, assets.
 - **Graph write**, for agents that build knowledge: findings, nodes, relationships, annotations, supersede, maps.
 - **Retrieval:** budgeted task context and claim verification.
 - **Handoffs:** create, update, resume, branch, list, get.
@@ -189,18 +212,49 @@ There are 52 tools. They cover:
 Writes are validated, append-only and attributed to the calling agent. Static facts cannot be overwritten, and
 results are size-bounded. Full reference: [docs/MCP_TOOLS.md](docs/MCP_TOOLS.md).
 
-## Languages
+## Set up your coding assistant
 
-| Language | With optional parser | Fallback |
+```bash
+promapkin install --list                     # platforms, format confidence, what is detected here
+promapkin install --platform claude-code     # or several: -p cursor -p vscode, or --detected
+promapkin install -p codex --dry-run         # show every file that would change
+promapkin uninstall                          # restore exactly what was there before
+```
+
+| Assistant | What `install` writes |
+|---|---|
+| Claude Code | `.mcp.json`, a `CLAUDE.md` block, a SessionStart hook (`promapkin brief --sync`), re-index after edits, a skill, `/promapkin-context`, `/promapkin-impact`, `/promapkin-handoff`, `/promapkin-blueprint` |
+| Codex CLI | `~/.codex/config.toml` server, `AGENTS.md` block, SessionStart hook in `.codex/hooks.json` |
+| Gemini CLI | `.gemini/settings.json`, `GEMINI.md` block, `/promapkin:*` commands |
+| OpenCode | `opencode.json` (`mcp`), `AGENTS.md`, commands |
+| VS Code / Copilot | `.vscode/mcp.json` (`servers`), `.github/copilot-instructions.md`, prompt files |
+| Cursor, Windsurf, Cline, Roo Code, Kiro, Zed, Continue, Amazon Q, Junie, Goose, Crush, Augment, Trae | each tool's MCP config file and its rules/steering file |
+| anything else | `--platform agents-md`: an `AGENTS.md` block |
+
+JSON configs are parsed and only the `promapkin` entry is added, and a file that isn't valid JSON is left alone.
+Text files get a marked block, and files you have edited are never overwritten. What changed is recorded in
+`.promapkin/installs.json`.
+
+## Languages, infrastructure and assets
+
+| Source | Extractor | Evidence |
 |---|---|---|
-| Python | AST, light type inference, reflection/DI/fixture/event wiring | — |
-| JavaScript / TypeScript | TypeScript compiler API: type-checked call targets, interfaces, routes, events | lexical |
-| Go, Rust, Java, C#, Kotlin, Ruby, PHP, C, C++, Swift, Scala | tree-sitter: declarations, impl/receiver methods, inheritance, imports, calls | lexical |
-| Markdown, ADRs, manifests (pip, npm, Cargo, Go) | sections, decisions, claims, dependencies | — |
-| Anything without a parser, in `--llm` mode | grounded LLM extraction | — |
+| Python | AST, light type inference, reflection/DI/fixture/event wiring | `ast` |
+| JavaScript / TypeScript, Vue, Svelte | TypeScript compiler API: type-checked call targets, interfaces, routes, events | `ast` |
+| Go, Rust, Java, C#, Kotlin, Ruby, PHP, C, C++, Swift, Scala, CUDA, GLSL, HLSL, Apex | tree-sitter: declarations, impl/receiver methods, inheritance, imports, calls, full doc comments | `ast` |
+| Dart, Lua, Elixir, Erlang, Haskell, OCaml, F#, Clojure, Common Lisp, Scheme, Racket, R, Julia, Perl, Bash, PowerShell, Zig, Nim, Objective-C, Elm, Solidity, Crystal, D, Fortran, Pascal, MATLAB, Verilog, VHDL, Gleam, Odin, V | tree-sitter, declarative per-language specs | `ast` |
+| Groovy, and any of the above without tree-sitter | lexical patterns | `lexical` |
+| Dockerfile, Compose, Kubernetes/Helm, Terraform, GitHub Actions/GitLab CI, OpenAPI | what runs which code, routing, env vars, IaC references | `manifest` |
+| SQL, Prisma, GraphQL, protobuf; SQL strings and ORM mappings in code | tables, keys, views, schema types, gRPC/GraphQL endpoints; who reads and writes each table | `manifest`, `lexical` |
+| Markdown, ADRs, manifests, PDF, Word, PowerPoint, images, video | sections, decisions, claims, code mentions; dimensions, duration; OCR or `--llm` vision | `documentation` |
+| Anything without a parser, in `--llm` mode | grounded LLM extraction | `llm_extraction` |
 
 Import resolution understands Python packages, relative and `tsconfig` module paths, Rust `crate::`/`super::` and
-workspace crates (Cargo.toml), and package-path languages.
+workspace crates (Cargo.toml), and package-path languages. Infrastructure meets code on shared nodes:
+- An environment variable set in a Dockerfile, Compose file, Kubernetes manifest or Terraform resource is the
+  same `config:KEY` node that `os.environ`/`process.env` reads.
+- `CMD ["uvicorn", "app.main:app"]` links to `module:app.main`.
+- A table is one node for its DDL, its ORM class and every query that touches it.
 
 ## Machine learning
 
@@ -224,7 +278,8 @@ under a tight token budget.
 ## Benchmarks
 
 - `promapkin bench retrieval` measures recall@k, MRR and token reduction against naive exploration, with an
-  ML-vs-heuristic ablation.
+  ML-vs-heuristic ablation. The published specs and raw results for fastapi, clap and Promapkin itself are in
+  [examples/bench/](examples/bench/).
 - `promapkin bench agents` runs the same coding agent with and without Promapkin on identical tasks. It records
   tokens, completion, regressions, retrieval accuracy and setup time.
 
@@ -244,7 +299,8 @@ See [SECURITY.md](SECURITY.md).
 
 ```bash
 python -m unittest discover -s tests -t .             # core suite, no network
-pip install -e '.[all]' && python -m unittest discover -s tests -t .   # + parsers and LLM SDK paths
+pip install -e '.[all]' && python -m unittest discover -s tests -t .   # + parsers, LLM SDK, pypdf, PyYAML paths
+python scripts/gen_mcp_docs.py                        # regenerate docs/MCP_TOOLS.md after changing tools
 ```
 
 CI runs Python 3.10–3.13, with and without extras. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for

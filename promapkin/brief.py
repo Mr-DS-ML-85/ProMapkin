@@ -40,7 +40,8 @@ def brief(ws: Workspace, sync: bool = False, max_chars: int = 4000) -> str:
     out.append(f"Promapkin index of {ov.get('repository')} at {str(st.get('indexed_revision'))[:12]}"
                f"{'' if st.get('index_fresh') else f'; {changed} file(s) changed since indexing'} {note}".rstrip())
     langs = sorted((ov.get("languages") or {}).items(), key=lambda kv: -kv[1].get("files", 0))
-    langs = [(k, v) for k, v in langs if k not in ("manifest", "markdown", "text")]
+    from promapkin.extract import NON_CODE
+    langs = [(k, v) for k, v in langs if k not in NON_CODE]
     if langs:
         out.append("Languages: " + ", ".join(f"{k} ({v['files']} files)" for k, v in langs[:8]))
     styles = [s["statement"] for s in (ov.get("styles") or [])[:4]]

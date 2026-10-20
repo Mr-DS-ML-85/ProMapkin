@@ -26,6 +26,7 @@ promapkin --llm review                      # review uncommitted changes against
 | `verify` | static corroboration of doc claims | plus an LLM verdict per claim |
 | `handoff create --notes` | notes stored as summary | notes structured into findings/constraints/next action/validation |
 | `ask` | — | agent loop: the LLM calls Promapkin's own read tools (MCP tool set) to answer |
+| images (`scan`) | dimensions, SVG text, OCR when installed | a vision model describes diagrams and screenshots; drawn relationships become claims (`llm_images: false` to opt out) |
 | `review` | changed symbols, impact, tests to run, decisions | plus LLM review findings tied to diff lines |
 
 Python keeps using the AST and JS/TS the TypeScript compiler when installed: real parsers beat a model at
