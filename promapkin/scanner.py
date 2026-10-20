@@ -19,13 +19,13 @@ import json
 import os
 import re
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from promapkin import evidence as ev
 from promapkin import gitutil
 from promapkin.config import Workspace
-from promapkin.extract import NON_CODE, SNIFF, Facts, data_links, extractor_for, is_generated, is_test_path, \
+from promapkin.extract import ASSET_LANGUAGES, NON_CODE, SNIFF, Facts, data_links, extractor_for, is_generated, is_test_path, \
     language_of
 from promapkin.security import MAX_FILE_BYTES, is_probably_binary
 from promapkin.store import Store
@@ -81,6 +81,11 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
             if not lang:
                 continue
             path = ws.root / rel
+            if lang in ASSET_LANGUAGES:
+                asset = _asset_fingerprint(path, lang)
+                if asset:
+                    contents[rel] = asset
+                continue
             try:
                 if path.stat().st_size > MAX_FILE_BYTES:
                     continue
@@ -108,6 +113,9 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
         parsed = _batch_parse(ws, [p for p in changed if contents[p][1] in ("javascript", "typescript")], errors)
         extracted: dict[str, tuple[str, bool, Facts | None, str | None]] = {}
         for p in changed:
+            if contents[p][1] in ASSET_LANGUAGES:
+                extracted[p] = ("", False, *_extract_asset(ws, p, contents[p][1], contents[p][2], errors))
+                continue
             text = (ws.root / p).read_text(encoding="utf-8", errors="replace")
             facts = parsed.get(p)
             parser = "typescript-compiler" if facts else None
@@ -273,6 +281,39 @@ def _extract_one(ws: Workspace, path: str, lang: str, text: str, errors: list[st
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{path}: LLM document analysis failed ({str(exc)[:200]})")
     return facts, parser
+
+
+def _asset_fingerprint(path: Path, lang: str) -> tuple[str, str, int] | None:
+    """(sha, language, size) for a binary asset. Video is never read whole: its identity is size, mtime and header."""
+    from promapkin.extract.assets_ext import MAX_ASSET_BYTES
+    try:
+        st = path.stat()
+        if lang == "video":
+            with path.open("rb") as fh:
+                head = fh.read(65536)
+            return gitutil.sha_of(f"{st.st_size}:{int(st.st_mtime)}:".encode() + head), lang, st.st_size
+        if st.st_size > MAX_ASSET_BYTES[lang] or st.st_size == 0:
+            return None
+        return gitutil.sha_of(path.read_bytes()), lang, st.st_size
+    except OSError:
+        return None
+
+
+def _extract_asset(ws: Workspace, rel: str, lang: str, size: int, errors: list[str]) -> tuple[Facts | None, str]:
+    from promapkin.extract import assets_ext
+    path = ws.root / rel
+    try:
+        if lang == "video":
+            with path.open("rb") as fh:
+                data = fh.read(4_000_000)      # enough for the MP4 `moov` box in streaming-friendly files
+        else:
+            data = path.read_bytes()
+    except OSError as exc:
+        errors.append(f"{rel}: {exc}")
+        return None, ""
+    llm = getattr(ws, "llm", None) if ws.config.llm_images else None
+    facts = assets_ext.extract(rel, data, lang, llm=llm, size=size)
+    return facts, f"asset:{lang}"
 
 
 def _stale_runtime_edges(store: Store, touched: set[str]) -> int:

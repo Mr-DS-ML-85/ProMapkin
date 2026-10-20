@@ -158,7 +158,9 @@ class LLMClient:
         self.usage = usage
 
     def json(self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int = 16000,
-             effort: str = "medium", name: str = "result") -> dict[str, Any]:
+             effort: str = "medium", name: str = "result", images: list[tuple[str, str]] | None = None
+             ) -> dict[str, Any]:
+        """Structured call. `images`: [(media type, base64 data)] sent before the text (vision models)."""
         raise NotImplementedError
 
     def text(self, system: str, user: str, *, max_tokens: int = 16000, effort: str = "medium") -> str:
@@ -242,8 +244,13 @@ class AnthropicClient(LLMClient):
         return "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
 
     def json(self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int = 16000,
-             effort: str = "medium", name: str = "result") -> dict[str, Any]:
-        resp = self._create(max_tokens=max_tokens, system=system, messages=[{"role": "user", "content": user}],
+             effort: str = "medium", name: str = "result", images: list[tuple[str, str]] | None = None
+             ) -> dict[str, Any]:
+        content: Any = user
+        if images:
+            content = [{"type": "image", "source": {"type": "base64", "media_type": mt, "data": b64}}
+                       for mt, b64 in images] + [{"type": "text", "text": user}]
+        resp = self._create(max_tokens=max_tokens, system=system, messages=[{"role": "user", "content": content}],
                             output_config={"effort": effort,
                                            "format": {"type": "json_schema", "schema": strict_schema(schema)}})
         if resp.stop_reason == "max_tokens":
@@ -340,8 +347,13 @@ class OpenAIClient(LLMClient):
         return choice
 
     def json(self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int = 16000,
-             effort: str = "medium", name: str = "result") -> dict[str, Any]:
+             effort: str = "medium", name: str = "result", images: list[tuple[str, str]] | None = None
+             ) -> dict[str, Any]:
         mode = self.structured_output
+        content: Any = user
+        if images:
+            content = [{"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b64}"}} for mt, b64 in images] \
+                + [{"type": "text", "text": user}]
         extra: dict[str, Any] = {}
         if mode == "json_schema":
             extra["response_format"] = {"type": "json_schema", "json_schema": {
@@ -351,7 +363,7 @@ class OpenAIClient(LLMClient):
             if mode == "json_object":
                 extra["response_format"] = {"type": "json_object"}
         choice = self._create(max_tokens=max_tokens, messages=[{"role": "system", "content": system},
-                                                               {"role": "user", "content": user}], **extra)
+                                                               {"role": "user", "content": content}], **extra)
         if choice.finish_reason == "length":
             raise LLMTruncated("structured output was cut off by the token limit")
         return parse_structured(choice.message.content, schema, finish_reason=choice.finish_reason or "",

@@ -163,11 +163,13 @@ class LLMEngine:
         return clean
 
     def call_json(self, task: str, system: str, user: str, schema: dict[str, Any], *, subject: str = "",
-                  effort: str = "medium", max_tokens: int = 16000, use_cache: bool = True) -> dict[str, Any]:
+                  effort: str = "medium", max_tokens: int = 16000, use_cache: bool = True,
+                  images: list[tuple[str, str]] | None = None) -> dict[str, Any]:
         """One cached, budgeted, redacted structured call. Safe to call from worker threads only with
         use_cache=False (SQLite access stays on the calling thread)."""
         user = self._prepare(user)
-        key = self._key(task, system, user, json.dumps(schema, sort_keys=True))
+        key = self._key(task, system, user, json.dumps(schema, sort_keys=True),
+                        *(hashlib.sha256(b64.encode()).hexdigest() for _mt, b64 in images or []))
         if use_cache:
             hit = self._cache_get(key)
             if hit is not None and self._valid_hit(hit, schema):
@@ -178,7 +180,7 @@ class LLMEngine:
         self._log(task, len(user), subject)
         try:
             out = self.client.json(SYSTEM_BASE + "\n\n" + system, user, schema, max_tokens=max_tokens,
-                                   effort=effort, name=task)
+                                   effort=effort, name=task, **({"images": images} if images else {}))
         except LLMInvalidOutput as exc:
             raise self._debug(task, subject, exc) from exc.__cause__
         if use_cache:
@@ -489,6 +491,26 @@ class LLMEngine:
             if name and name in text:
                 facts.ref(doc_id, name.replace("::", "."), "mentions", 1)
         self.stats.dropped_ungrounded += dropped
+
+    IMAGE_SCHEMA = {"type": "object", "properties": {
+        "kind": {"type": "string", "enum": ["architecture_diagram", "sequence_diagram", "er_diagram", "flowchart",
+                                           "ui_screenshot", "chart", "photo", "logo", "other"]},
+        "summary": {"type": "string"},
+        "components": {"type": "array", "items": {"type": "string"}},
+        "relationships": {"type": "array", "items": {"type": "object", "properties": {
+            "source": {"type": "string"}, "target": {"type": "string"}, "label": {"type": "string"}}}},
+        "text_in_image": {"type": "string"}}}
+
+    def describe_image(self, path: str, data: bytes, media_type: str) -> dict[str, Any]:
+        """Vision: what an image in the repository shows. Diagrams yield their components and the arrows between
+        them (as written in the image), which become documentation claims linked to code by name."""
+        import base64
+        system = ("Describe this image from a software repository for an engineer. Classify it. For diagrams list "
+                  "the components exactly as labelled and every drawn relationship (source -> target, with the "
+                  "arrow's label). Transcribe visible text. Do not guess at anything not visible.")
+        return self.call_json("describe_image", system, f"Image file: {path}", self.IMAGE_SCHEMA, subject=path,
+                              effort="low", max_tokens=4000,
+                              images=[(media_type, base64.b64encode(data).decode())])
 
     # ------------------------------------------------------------------ retrieval
     def expand_query(self, query: str) -> dict[str, list[str]]:

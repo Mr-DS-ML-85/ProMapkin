@@ -142,6 +142,8 @@ def build_parser() -> argparse.ArgumentParser:
     src.add_argument("ref")
     dg = grs.add_parser("diagram", help="Mermaid diagram")
     grs.add_parser("infra", help="deployables, routing, cloud resources, pipelines, config surface")
+    ga = grs.add_parser("assets", help="PDFs, Office files, images and videos with extracted text/metadata")
+    ga.add_argument("--media", choices=["pdf", "office", "image", "video"])
     grs.add_parser("schema", help="tables, keys, ORM mappings, readers/writers, API schemas and spec coverage")
     dg.add_argument("kind", choices=["infrastructure", "er", "architecture", "dataflow", "patterns", "roadmap",
                                      "neighborhood",
@@ -921,6 +923,13 @@ def _graph(args: argparse.Namespace, svc: Service) -> int:
         emit(args, svc.dataflow(args.ref), fmt_flows)
     elif c == "deps":
         emit(args, svc.dependencies(args.module))
+    elif c == "assets":
+        emit(args, svc.assets(args.media), lambda d: "\n".join(
+            [f"{a['media']:<6} {a['file']:<48} " + " ".join(
+                f"{k}={a[k]}" for k in ("pages", "width", "height", "duration_seconds", "image_kind") if k in a)
+             + (" text" if a.get("has_text") else "") + (f"  ← {', '.join(a['referenced_by'][:3])}"
+                                                       if a["referenced_by"] else "")
+             for a in d["assets"]]) or "no assets indexed")
     elif c == "infra":
         emit(args, svc.infrastructure(), _fmt_infra)
     elif c == "schema":

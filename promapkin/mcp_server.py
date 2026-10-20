@@ -111,6 +111,11 @@ TOOLS: list[Tool] = [
        "run, what routes to them and the config they set; ingress; Terraform resources by category with their "
        "dependencies; CI pipelines; and the configuration surface (keys read by code but never declared, and the "
        "reverse).", obj({}), lambda s, a: s.infrastructure()),
+    _t("list_assets", "PDFs, Word/PowerPoint files, images and videos in the repository: pages, dimensions, "
+       "duration, extracted text availability, image descriptions (--llm), which docs reference them and which "
+       "code they mention. Their text is searchable with search_graph.",
+       obj({"media": {"type": "string", "enum": ["pdf", "office", "image", "video"]}, "limit": I}),
+       lambda s, a: s.assets(a.get("media"), a.get("limit", 200))),
     _t("get_data_model", "Tables and views (columns, keys, foreign keys), ORM classes mapped to them, the symbols that "
        "read and write each table, migrations, GraphQL/protobuf/OpenAPI schema types, endpoints by protocol, and "
        "API-spec coverage (spec operations without code, code endpoints missing from the spec).", obj({}),

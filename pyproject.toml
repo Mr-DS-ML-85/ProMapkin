@@ -22,8 +22,10 @@ ml = ["fastembed>=0.3", "numpy>=1.24"]
 dl = ["sentence-transformers>=2.2", "numpy>=1.24"]
 llm = ["anthropic>=0.70", "openai>=1.40"]
 parsers = ["tree-sitter>=0.23", "tree-sitter-language-pack>=0.7"]
+assets = ["pypdf>=4"]
+yaml = ["pyyaml>=6"]
 all = ["fastembed>=0.3", "numpy>=1.24", "anthropic>=0.70", "openai>=1.40", "tree-sitter>=0.23",
-       "tree-sitter-language-pack>=0.7"]
+       "tree-sitter-language-pack>=0.7", "pypdf>=4", "pyyaml>=6"]
 
 [tool.setuptools.package-data]
 promapkin = ["extract/*.js", "py.typed"]

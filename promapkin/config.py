@@ -44,6 +44,7 @@ class Config:
     llm_concurrency: int = 4
     llm_timeout: float = 300.0
     llm_fallbacks: bool = True        # Anthropic server-side refusal fallback (first-party API only)
+    llm_images: bool = True           # --llm: let a vision model describe repository images (diagrams, screenshots)
     db_busy_timeout: float = 30.0     # seconds to wait for another process's write transaction
     layers: dict[str, list[str]] = field(default_factory=dict)
 

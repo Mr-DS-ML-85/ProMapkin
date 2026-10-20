@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 import time
 from pathlib import Path
 from typing import Any
@@ -177,6 +178,29 @@ class Service:
             return {"kind": kind, "format": "mermaid", "source": fn(self.store)}
         raise ServiceError("kind must be architecture|dataflow|patterns|roadmap|neighborhood|dependencies|map|"
                            "infrastructure|er")
+
+    def assets(self, media: str | None = None, limit: int = 200) -> dict[str, Any]:
+        """Indexed PDFs, Office documents, images and videos with what was extracted from each."""
+        self._require_index()
+        rows = []
+        for n in self.store.nodes("asset"):
+            a = n["attrs"]
+            if media and a.get("media") != media:
+                continue
+            refs = [e["src"] for e in self.store.edges(dst=f"file:{n['file']}", types=["documents"])]
+            mentions = [r[0] for r in self.store.conn.execute(
+                "SELECT dst FROM edges WHERE type='documents' AND (src = ? OR src LIKE ?) AND dst LIKE 'symbol:%' "
+                "OR type='documents' AND (src = ? OR src LIKE ?) AND dst LIKE 'module:%'",
+                (f"doc:{n['file']}", f"doc:{n['file']}#%") * 2)]
+            rows.append({"id": n["id"], "file": n["file"], "title": n["name"], "media": a.get("media"),
+                         "format": a.get("format"), "bytes": a.get("bytes"),
+                         **{k: a[k] for k in ("pages", "width", "height", "duration_seconds", "image_kind",
+                                              "description", "text_extractor", "text_note") if a.get(k) is not None},
+                         "has_text": a.get("has_text"), "referenced_by": sorted(set(refs))[:10],
+                         "mentions_code": sorted(set(mentions))[:15]})
+        rows.sort(key=lambda r: r["file"])
+        return {"assets": rows[:limit], "count": len(rows),
+                "by_media": dict(sorted(Counter(r["media"] for r in rows).items()))}
 
     def infrastructure(self) -> dict[str, Any]:
         self._require_index()
