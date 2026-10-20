@@ -62,7 +62,7 @@ classes raises it.
 | I. Structural core: Git, parsing, symbol index, dependency graph, local persistence, CLI | done (Python AST; JS/TS lexical) |
 | II. Blueprint compiler: specialists, architecture, flows, API, patterns, decisions, roadmap | done (deterministic specialists + optional provider synthesis) |
 | III. Semantic retrieval: hybrid search, typed traversal, evidence ranking, context compiler, revision-aware cache | done |
-| IV. Agent interoperability: MCP, handoffs, schemas, provider adapters, cross-session workflows | done (46 tools; command / anthropic / mcp-queue providers) |
+| IV. Agent interoperability: MCP, handoffs, schemas, provider adapters, cross-session workflows | done (52 tools; command / anthropic / openai / mcp-queue providers; `--llm` CLI) |
 | V. Continuous intelligence: incremental re-analysis, stale claims, impact, regression checks, benchmarks | done (`sync`, `verify`, retrieval benchmark, agent A/B harness); real-agent A/B runs not yet collected |
 
 ## MVP acceptance checklist
@@ -81,15 +81,39 @@ classes raises it.
       measured. The end-to-end harness is built and tested with a scripted agent; real-agent runs
       are still pending.
 
+## Parsers and resolution
+
+| Source | Extractor | Evidence |
+|---|---|---|
+| Python | `ast` + local type inference (annotations, `self.x = param`, constructor/factory return types) | `ast`, `static_resolved` |
+| JS/TS | TypeScript compiler API via `extract/ts_bridge.js` (one batched program per scan; checker resolves call targets) | `ast`, `static_resolved` |
+| Go, Rust, Java, C#, Kotlin, Ruby, PHP, C, C++, Swift, Scala | tree-sitter (`extract/treesitter_ext.py`) | `ast` |
+| Any of the above without its parser | lexical (`js_ext.py`, `generic_lexical.py`), or grounded LLM extraction in `--llm` mode | `lexical`, `llm_extraction` |
+
+Resolution order for a call: type-checker target (`ID:`), inferred receiver type (`TYPE:`/`RET:`), import
+alias (Python imports, JS imports, Rust `use` paths through workspace crates), same module/class, `Type::method`
+through a unique type name, then unique name match. Ambiguous names go to graph-embedding disambiguation.
+Incremental scans re-resolve only references owned by changed files, files whose edges pointed into changed files,
+and files whose references mention names that were added or removed.
+
+## Dynamic behaviour
+
+- Static detection of wiring the plain call graph misses: `getattr` with constant names, `importlib`, callbacks
+  passed to registration APIs, `Depends(...)`, pytest fixtures, event emit/subscribe (Python and TS), signal
+  `connect`, task-queue `.delay`, dotted-string references (DI containers, settings). These edges carry a `wiring`
+  attribute and inferred (`heuristic`) evidence.
+- Runtime evidence via `promapkin trace run -- <command>`: Python profiling (caller → callee, test → reached code)
+  and Node V8 coverage. Runtime edges not present statically are reported as dynamic links; they are marked stale
+  when the traced code changes.
+- Generated files are indexed and flagged (`generated`), so readers know not to edit them.
+
 ## Known limitations
 
-- JavaScript/TypeScript extraction is lexical: no full parser, no type inference. Its facts carry
-  `lexical` evidence and are weighted accordingly. Other languages are indexed only through docs
-  and manifests.
-- Static analysis cannot see reflection, generated code or runtime wiring. Such paths appear only
-  as `inferred` (dispatch, name match, ML) or are missing. Runtime evidence can be recorded by
-  agents (`evidence: runtime`) but is never collected by executing code.
-- Neural embeddings are optional. The built-in hashing embedder is mostly lexical, so semantic
-  recall on vocabulary-gap queries needs a downloaded model.
-- References are re-resolved in full on every scan. That is cheap at tested sizes, but
-  incremental resolution would be the next optimization for very large repositories.
+- Tree-sitter and TypeScript extraction are optional installs; without them the lexical fallback is used (weighted
+  lower) unless `--llm` is on. Kotlin/Swift/Scala inheritance and call extraction is shallower than Python/TS.
+- Cross-file resolution for tree-sitter languages relies on imports, crate paths and unique names; there is no
+  per-language type checker for them (Rust trait-object dispatch, Java overloads and Go interface satisfaction are
+  approximated through `implements`/`overrides` edges and name matching, tagged accordingly).
+- Runtime tracing covers Python call edges and Node function coverage; other runtimes are not traced.
+- The built-in hashing embedder is mostly lexical; semantic recall on vocabulary-gap queries needs a downloaded
+  neural model or `--llm`.

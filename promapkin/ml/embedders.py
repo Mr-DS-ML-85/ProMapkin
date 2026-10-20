@@ -8,8 +8,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import math
+import zlib
 import re
 from array import array
 from typing import Iterable, Sequence
@@ -61,6 +61,20 @@ def top_k(query: Vector, items: list[tuple[str, bytes]], k: int) -> list[tuple[s
     return scored[:k]
 
 
+_HASH_CACHE: dict[str, int] = {}
+
+
+def _hash(feature: str) -> int:
+    """Stable 64-bit feature hash (crc32 of the feature and of its reverse; C speed, memoized)."""
+    h = _HASH_CACHE.get(feature)
+    if h is None:
+        b = feature.encode()
+        h = (zlib.crc32(b) << 32) | zlib.crc32(b[::-1])
+        if len(_HASH_CACHE) < 500_000:
+            _HASH_CACHE[feature] = h
+    return h
+
+
 class Embedder:
     name = "abstract"
     dim = 0
@@ -73,7 +87,7 @@ class Embedder:
 class HashingEmbedder(Embedder):
     """Feature hashing over words, split identifiers and character trigrams, sublinear TF, L2 normalized."""
 
-    name = "builtin-hash-512"
+    name = "builtin-hash-512-v2"
     neural = False
 
     def __init__(self, dim: int = 512):
@@ -96,7 +110,7 @@ class HashingEmbedder(Embedder):
         for text in texts:
             counts: dict[int, float] = {}
             for f in self.features(text):
-                h = int.from_bytes(hashlib.blake2b(f.encode(), digest_size=8).digest(), "little")
+                h = _hash(f)
                 idx, sign = h % self.dim, (1.0 if (h >> 32) & 1 else -1.0)
                 weight = 1.0 if f.startswith("w:") else 0.35
                 counts[idx] = counts.get(idx, 0.0) + sign * weight

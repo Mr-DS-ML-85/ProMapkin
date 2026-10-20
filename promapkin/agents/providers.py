@@ -110,6 +110,11 @@ class AnthropicProvider(Provider):
                                  "bytes": size}) + "\n")
 
 
+def _sdk_available(name: str) -> bool:
+    import importlib.util
+    return importlib.util.find_spec(name) is not None
+
+
 def _parse_json(text: str) -> dict[str, Any]:
     text = text.strip()
     m = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
@@ -124,10 +129,44 @@ def _parse_json(text: str) -> dict[str, Any]:
         raise ProviderError(f"provider returned invalid JSON: {exc}") from exc
 
 
+class LLMProvider(Provider):
+    """Specialist synthesis through the LLM engine (Anthropic or OpenAI / OpenAI-compatible base URL)."""
+
+    remote = True
+
+    def __init__(self, engine: Any):
+        self.engine = engine
+        self.name = engine.label
+
+    def complete(self, contract: dict[str, Any]) -> dict[str, Any] | None:
+        from promapkin.llm.errors import LLMError
+        try:
+            return self.engine.synthesize(contract)
+        except LLMError as exc:
+            raise ProviderError(str(exc)) from exc
+
+
 def make_provider(ws: Any) -> Provider:
     cfg = ws.config
+    engine = getattr(ws, "llm", None)
+    if engine is not None:   # --llm on the command line: explicit consent for this invocation
+        return LLMProvider(engine)
     if cfg.provider in ("", "none"):
         return NoneProvider()
+    if cfg.provider in ("openai", "anthropic-llm"):
+        cfg_provider = "openai"
+    else:
+        cfg_provider = cfg.provider
+    if cfg_provider == "openai" or (cfg_provider == "anthropic" and _sdk_available("anthropic")):
+        if not cfg.allow_remote:
+            raise ProviderError("remote providers send source excerpts off this machine; set allow_remote=true "
+                                "in .promapkin/config.json to permit it (or pass --llm for one command)")
+        from promapkin.llm import make_engine
+        from promapkin.llm.errors import LLMError
+        try:
+            return LLMProvider(make_engine(ws, provider=cfg_provider, model=cfg.provider_model or None))
+        except LLMError as exc:
+            raise ProviderError(str(exc)) from exc
     if cfg.provider == "mcp":
         return QueueProvider()
     if cfg.provider == "command":

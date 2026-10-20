@@ -125,10 +125,22 @@ TOOLS: list[Tool] = [
             "file_prefix": S, "limit": I}),
        lambda s, a: s.query(a.get("kinds"), a.get("name_pattern"), a.get("edge_types"), a.get("evidence"),
                             a.get("min_trust", 0.0), a.get("status"), a.get("file_prefix"), a.get("limit", 100))),
-    _t("trace_path", "Most-trusted execution/dependency paths between two nodes (evidence-weighted), with the "
-       "evidence of every step.", obj({"source": S, "target": S, "max_depth": I, "k": I, "types": SL},
-                                      ["source", "target"]),
-       lambda s, a: s.trace(a["source"], a["target"], a.get("max_depth", 8), a.get("k", 3), a.get("types"))),
+    _t("trace_path", "Most-trusted paths between two nodes with the evidence of every step and a one-line "
+       "summary. mode auto tries flow edges, then structural edges, then undirected relations.",
+       obj({"source": S, "target": S, "max_depth": I, "k": I, "types": SL,
+            "mode": {"type": "string", "enum": ["auto", "flow", "structural", "related"]}}, ["source", "target"]),
+       lambda s, a: s.trace(a["source"], a["target"], a.get("max_depth", 8), a.get("k", 3), a.get("types"),
+                            a.get("mode", "auto"))),
+    _t("get_hubs", "Most-connected code symbols ('god nodes') by distinct neighbours over code edges.",
+       obj({"limit": I}), lambda s, a: s.hubs(a.get("limit", 25))),
+    _t("get_communities", "Communities of modules (ML: imports + embedding similarity; heuristic: directories).",
+       obj({}), lambda s, a: s.communities()),
+    _t("get_surprising_connections", "Rare observed edges between otherwise separate communities (name matches "
+       "and inferred links excluded, so no false cross-script links).", obj({"limit": I}),
+       lambda s, a: s.surprises(a.get("limit", 20))),
+    _t("export_graph_html", "Write a self-contained interactive HTML graph explorer (works offline).",
+       obj({"path": S, "max_nodes": I}), lambda s, a: s.export_html(a.get("path"), a.get("max_nodes", 1500)),
+       False),
     _t("trace_dataflow", "Data paths from an entry point/endpoint/function to sinks (database, HTTP, files, queues, "
        "config) labelled static vs inferred.", obj({"source": S, "max_depth": I, "limit": I}, ["source"]),
        lambda s, a: s.dataflow(a["source"], a.get("max_depth", 7), a.get("limit", 30))),
@@ -240,6 +252,13 @@ TOOLS: list[Tool] = [
     _t("submit_classification_feedback", "Teach the classifiers a labelled example (stored in the repo's "
        ".promapkin/training).", obj({"task": S, "text": S, "label": S}, ["task", "text", "label"]),
        lambda s, a: s.classification_feedback(a["task"], a["text"], a["label"]), False),
+
+    _t("ingest_runtime_trace", "Ingest a runtime trace directory produced by `promapkin trace run` (inside the "
+       "repository) as runtime evidence: real call edges, test→code links, dynamic links static analysis missed. "
+       "Promapkin never executes code from MCP.", obj({"directory": S}, ["directory"]),
+       lambda s, a: s.ingest_trace(a["directory"]), False),
+    _t("get_toolchain_status", "Which parsers are active per language (TypeScript compiler, tree-sitter, lexical) "
+       "and how to install the real ones.", obj({}), lambda s, a: s.toolchain()),
 
     # ---------------------------------------------------------------- benchmark
     _t("run_benchmark", "Retrieval benchmark: recall@k, MRR, context hit rate and token reduction vs naive "

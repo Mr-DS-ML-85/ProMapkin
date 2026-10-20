@@ -12,6 +12,13 @@ from promapkin import evidence as ev
 from promapkin.extract import Facts, is_test_path
 from promapkin.extract.resources import AUTH_HINT, classify_call
 
+EVENT_EMIT = {"emit", "publish", "trigger", "dispatch_event", "fire"}
+EVENT_ON = {"on", "once", "add_listener", "add_event_listener", "subscribe", "add_handler"}
+REGISTRATION_CALLS = {"register", "add_done_callback", "submit", "add_job", "callLater", "call_soon", "call_later",
+                      "add_task", "register_callback", "add_command", "add_url_rule", "connect_handler"}
+CALLBACK_KWARGS = {"target", "callback", "handler", "func", "view_func", "on_success", "on_error", "on_failure",
+                   "listener", "hook"}
+DOTTED_PATH = re.compile(r"^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)+\.(?:[A-Z][A-Za-z0-9]*|[a-z_][a-z0-9_]*)$")
 ROUTE_METHODS = {"get", "post", "put", "delete", "patch", "head", "options", "route", "api_route", "websocket"}
 NOTE_RE = re.compile(
     r"\b(we (chose|decided|use|prefer|avoid)|because|decision|trade-?off|rationale|deliberately|intentionally|"
@@ -215,6 +222,19 @@ class _Visitor(ast.NodeVisitor):
         )
         self.f.edge(self._owner(), sid, "contains" if self.stack else "defines", ev.AST, line=node.lineno)
 
+        # Framework wiring the call graph cannot see: pytest fixtures and FastAPI dependencies.
+        if is_test_fn:
+            for a in all_args:
+                if a.arg not in ("self", "cls"):
+                    self.f.ref(sid, a.arg, "invokes", node.lineno, fixture=True, wiring="pytest fixture",
+                               **self._ctx())
+        for d in args.defaults + [d for d in args.kw_defaults if d]:
+            if isinstance(d, ast.Call) and (dotted(d.func) or "").endswith("Depends") and d.args:
+                dep = dotted(d.args[0])
+                if dep:
+                    self.f.ref(sid, dep, "invokes", node.lineno, wiring="dependency injection (Depends)",
+                               **self._ctx())
+
         # Type references in the signature (also the basis for dependency-injection detection).
         for a in all_args:
             for t in _annotation_names(a.annotation):
@@ -295,6 +315,7 @@ class _Visitor(ast.NodeVisitor):
         expr = dotted(node.func)
         src = self._owner()
         if expr:
+            self._dynamic_wiring(node, expr, src)
             # Django-style routing: path("route/", view)
             if expr in ("path", "re_path", "url") and len(node.args) >= 2 and isinstance(node.args[0], ast.Constant) \
                     and isinstance(node.args[0].value, str):
@@ -331,6 +352,52 @@ class _Visitor(ast.NodeVisitor):
                 typed = self._typed_target(expr.replace("()", ""))
                 self.f.ref(src, typed or expr, "calls", node.lineno, **self._ctx())
         self.generic_visit(node)
+
+    def _dynamic_wiring(self, node: ast.Call, expr: str, src: str) -> None:
+        """Reflection, dynamic imports, callbacks and events: links a plain call graph misses."""
+        last = expr.rsplit(".", 1)[-1]
+        args = node.args
+        const = [a.value for a in args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
+        if expr in ("getattr", "builtins.getattr") and len(args) >= 2 and isinstance(args[1], ast.Constant) \
+                and isinstance(args[1].value, str):
+            obj = dotted(args[0])
+            if obj:
+                self.f.ref(src, f"{obj}.{args[1].value}", "calls", node.lineno, wiring="reflection (getattr)",
+                           **self._ctx())
+        elif expr in ("importlib.import_module", "import_module", "__import__") and const:
+            self.f.ref(f"module:{self.mod}", const[0], "imports", node.lineno, module=self.mod,
+                       wiring="dynamic import")
+        elif last in EVENT_EMIT and const:
+            eid = f"event:{const[0]}"
+            self.f.node(eid, "event", const[0], ev.AST, attrs={"source": "event wiring"})
+            self.f.edge(src, eid, "produces", ev.AST, line=node.lineno)
+        elif last in EVENT_ON and const and len(args) >= 2:
+            eid = f"event:{const[0]}"
+            self.f.node(eid, "event", const[0], ev.AST, attrs={"source": "event wiring"})
+            self.f.edge(src, eid, "consumes", ev.AST, line=node.lineno)
+            handler = dotted(args[1])
+            if handler:
+                self.f.ref(eid, handler, "invokes", node.lineno, wiring="event handler", **self._ctx())
+        elif last == "connect" and args and "." in expr:   # signal.connect(handler) (Django, blinker, Qt)
+            handler = dotted(args[0])
+            eid = f"event:{expr.rsplit('.', 1)[0]}"
+            if handler:
+                self.f.node(eid, "event", expr.rsplit(".", 1)[0], ev.AST, attrs={"source": "signal"})
+                self.f.edge(src, eid, "consumes", ev.AST, line=node.lineno)
+                self.f.ref(eid, handler, "invokes", node.lineno, wiring="signal receiver", **self._ctx())
+        callbacks = [kw.value for kw in node.keywords if kw.arg in CALLBACK_KWARGS]
+        if last in REGISTRATION_CALLS:
+            callbacks += [a for a in args if isinstance(a, (ast.Name, ast.Attribute))]
+        for cb in callbacks:
+            target = dotted(cb)
+            if target and target not in ("self", "None"):
+                self.f.ref(src, target, "invokes", node.lineno, wiring=f"callback ({last})", **self._ctx())
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        # Dotted strings naming code ("app.services.Mailer") are how DI containers and settings wire classes.
+        if isinstance(node.value, str) and DOTTED_PATH.match(node.value):
+            self.f.ref(self._owner(), node.value, "references", node.lineno, wiring="string reference",
+                       exact=True, **self._ctx())
 
     def _is_local(self, qualified: str) -> bool:
         return qualified.split(".")[0] == self.mod.split(".")[0]

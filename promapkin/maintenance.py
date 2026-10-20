@@ -58,6 +58,21 @@ def verify(ws: Workspace) -> dict[str, Any]:
     v = sp.verification(ctx)
     report["documentation"] = {"summary": v["summary"], "contradictions": v["contradictions"],
                                "dangling_references": v["dangling_references"]}
+    llm = getattr(ws, "llm", None)
+    if llm is not None and v["documentation_claims"]:
+        from promapkin.llm.errors import LLMError
+        try:
+            verdicts = llm.judge_claims([{"claim": c["claim"], "source": c["source"], "static_evidence": c["evidence"],
+                                          "static_status": c["status"]} for c in v["documentation_claims"]])
+            for vd in verdicts:
+                i = vd.get("index")
+                if isinstance(i, int) and 0 <= i < len(v["documentation_claims"]):
+                    v["documentation_claims"][i]["llm_verdict"] = {"verdict": vd["verdict"],
+                                                                   "explanation": vd["explanation"],
+                                                                   "model": llm.label}
+            report["documentation"]["llm_judged"] = v["documentation_claims"]
+        except LLMError as exc:
+            report["documentation"]["llm_error"] = str(exc)
 
     dangling = s.conn.execute(
         "SELECT COUNT(*) FROM edges WHERE src NOT IN (SELECT id FROM nodes) OR dst NOT IN (SELECT id FROM nodes)"

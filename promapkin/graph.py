@@ -23,6 +23,10 @@ DEPENDENCY_EDGES = {"calls", "instantiates", "imports", "inherits", "implements"
 # Forward execution / data movement.
 FLOW_EDGES = {"calls", "routes_to", "instantiates", "reads", "writes", "invokes", "depends_on", "dispatches"}
 STRUCTURE_EDGES = {"contains", "defines"}
+HUB_PREFIXES = {"package", "resource", "config", "dir", "repo", "file", "manifest", "event"}
+STRUCTURAL_TRACE_EDGES = {"calls", "routes_to", "instantiates", "reads", "writes", "invokes", "depends_on",
+                          "imports", "overrides", "exposes", "contains", "defines", "references", "inherits",
+                          "implements", "produces", "consumes", "raises"}
 SINK_KINDS = {"resource", "config", "package", "service"}
 
 
@@ -62,7 +66,16 @@ class Graph:
                 return found[0][0]
             raise NotFound(f"no graph node matches {ref!r}")
         order = {"class": 0, "function": 1, "method": 2, "module": 3, "endpoint": 4}
-        hits.sort(key=lambda n: (order.get(n["kind"], 9), len(n["id"])))
+
+        def rank(n: dict[str, Any]) -> tuple:
+            from promapkin.extract import is_test_path
+            qual = n.get("qualname") or ""
+            nesting = qual.count(".") - (n.get("id", "").split(":")[1].count(".") if n.get("id", "").count(":") >= 2
+                                         else 0)
+            # Prefer production code, then type-like kinds, then top-level over nested definitions.
+            return (is_test_path(n.get("file") or ""), order.get(n["kind"], 9), nesting, len(n["id"]))
+
+        hits.sort(key=rank)
         return hits[0]["id"]
 
     def edge_trust(self, e: dict[str, Any], corroborations: int = 0) -> float:
@@ -226,19 +239,46 @@ class Graph:
 
     # ---------------------------------------------------------------- tracing
     def trace(self, src_ref: str, dst_ref: str, max_depth: int = 8, k: int = 3,
-              types: Iterable[str] | None = None, exclude_evidence: Iterable[str] = ()) -> dict[str, Any]:
-        """Most-trusted forward paths between two nodes (Dijkstra over -log(trust))."""
+              types: Iterable[str] | None = None, exclude_evidence: Iterable[str] = (),
+              mode: str = "auto") -> dict[str, Any]:
+        """Most-trusted paths between two nodes (Dijkstra over -log(trust)).
+
+        mode "flow" follows execution/data edges forward; "structural" also follows containment,
+        references, inheritance and dependency edges forward; "related" ignores direction. "auto"
+        tries them in that order and reports which one produced the answer."""
         src, dst = self.resolve(src_ref), self.resolve(dst_ref)
-        allowed = set(types) if types else FLOW_EDGES | {"imports", "overrides", "exposes"}
+        exclude = set(exclude_evidence)
+        modes = [mode] if mode != "auto" else (["flow"] if types else ["flow", "structural", "related"])
+        paths: list[tuple[float, list[dict]]] = []
+        used = modes[0]
+        for m in modes:
+            used = m
+            allowed = set(types) if types else (FLOW_EDGES | {"imports", "overrides", "exposes"} if m == "flow"
+                                                   else STRUCTURAL_TRACE_EDGES)
+            paths = self._search(src, dst, allowed, exclude, max_depth, k, undirected=(m == "related"))
+            if paths:
+                break
+        reports = [self._path_report(c, p) for c, p in paths]
+        for r in reports:
+            r["summary"] = _path_summary(r["steps"])
+            r["mode"] = used
+        return {"from": self.node_summary(src), "to": self.node_summary(dst), "paths": reports,
+                "found": bool(paths), "mode": used if paths else None,
+                **({} if paths else {"hint": "no path in flow, structural or undirected modes within "
+                                              f"{max_depth} hops"})}
+
+    def _search(self, src: str, dst: str, allowed: set[str], exclude: set[str], max_depth: int, k: int,
+                undirected: bool = False) -> list[tuple[float, list[dict]]]:
         targets = {dst}
         dn = self.store.node(dst)
-        if dn and dn["kind"] in ("class", "module"):
+        if dn and dn["kind"] in ("class", "module", "file"):
             targets |= {e["dst"] for e in self.store.edges(src=dst, types=["contains", "defines"])}
-        paths = []
+        paths: list[tuple[float, list[dict]]] = []
         tie = 0
         heap: list[tuple[float, int, str, list[dict]]] = [(0.0, tie, src, [])]
         visits: dict[str, int] = defaultdict(int)
-        while heap and len(paths) < k:
+        expanded = 0
+        while heap and len(paths) < k and expanded < 20000:
             cost, _, cur, path = heapq.heappop(heap)
             if cur in targets and path:
                 key = tuple(s["target"] for s in path)
@@ -248,16 +288,26 @@ class Graph:
             visits[cur] += 1
             if visits[cur] > k or len(path) >= max_depth:
                 continue
-            for other, e, trust in self._forward(cur, allowed, set(exclude_evidence)):
+            expanded += 1
+            nbrs = self._forward(cur, allowed, exclude)
+            if undirected:
+                for o, e, t in self._adjacent(cur, "in", allowed):
+                    if e["evidence"] in exclude or (o not in targets and o.split(":", 1)[0] in HUB_PREFIXES):
+                        continue
+                    # Walking an edge backwards: still evidence, but a weaker statement about flow.
+                    nbrs.append((o, dict(e, reversed=True), round(t * 0.8, 4)))
+            for other, e, trust in nbrs:
                 if any(p["target"] == other for p in path) or other == src:
                     continue
+                if undirected and other not in targets and other.split(":", 1)[0] in HUB_PREFIXES:
+                    continue   # shared packages/resources would connect everything to everything
                 step = self.describe_edge(e)
+                if e.get("reversed"):
+                    step = {**step, "source": cur, "target": other, "type": f"{e['type']} (reverse)"}
                 step["trust"] = trust
                 tie += 1
                 heapq.heappush(heap, (cost - math.log(max(trust, 1e-6)), tie, other, path + [step]))
-        return {"from": self.node_summary(src), "to": self.node_summary(dst),
-                "paths": [self._path_report(c, p) for c, p in paths],
-                "found": bool(paths)}
+        return paths
 
     def _forward(self, node: str, allowed: set[str], exclude: set[str] | None = None) -> list[tuple[str, dict, float]]:
         if exclude:
@@ -425,6 +475,17 @@ def _trim_attrs(attrs: dict[str, Any]) -> dict[str, Any]:
         if isinstance(v, str) and len(v) > 400:
             v = v[:400] + "…"
         out[k] = v
+    return out
+
+
+def _path_summary(steps: list[dict[str, Any]]) -> str:
+    """'FastAPI --contains--> include_router --references--> APIRouter' (evidence in brackets)."""
+    if not steps:
+        return ""
+    label = lambda nid: nid.split(":")[-1]  # noqa: E731
+    out = label(steps[0]["source"])
+    for st in steps:
+        out += f" --{st['type']} [{st['evidence']}]--> {label(st['target'])}"
     return out
 
 

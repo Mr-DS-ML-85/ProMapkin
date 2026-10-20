@@ -172,6 +172,24 @@ class GraphMLTest(RepoTestCase):
         e = s.edges(src=amb[0]["src"], dst="symbol:searchapp.storage.index_repository:IndexRepository.get")
         self.assertEqual(e[0]["confidence"], graph_ml.STATIC_DISAMBIGUATION_CONFIDENCE)
 
+    def test_disambiguation_never_crashes_on_short_candidate_lists(self):
+        # Regression: a single remaining candidate used to raise IndexError (sims[1]) and roll back the scan.
+        s = self.ws.store
+        from promapkin.scanner import embed_pass
+        from promapkin import ml
+        rt = ml.runtime(self.ws)
+        src = "symbol:searchapp.services.search_service:SearchService.search"
+        with s.transaction():
+            embed_pass(s, rt)
+            graph_ml.propagate(s, rt.embedder.name)
+            gm = graph_ml.graph_model_name(rt.embedder.name)
+            amb = [{"src": src, "candidates": [src, "symbol:searchapp.storage.index_repository:IndexRepository.get"],
+                    "type": "calls", "file": None, "line": None},
+                   {"src": src, "candidates": [src], "type": "calls", "file": None, "line": None},
+                   {"src": src, "candidates": [], "type": "calls", "file": None, "line": None}]
+            graph_ml.disambiguate(s, amb, gm, None)
+            graph_ml.disambiguate(s, amb, None, None)
+
     def test_layers_are_classified_during_scan(self):
         mod = self.ws.store.node("module:searchapp.storage.index_repository")
         self.assertEqual(mod["attrs"]["layer"]["label"], "persistence")

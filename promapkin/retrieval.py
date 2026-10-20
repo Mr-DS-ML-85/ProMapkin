@@ -82,14 +82,25 @@ class Retriever:
         idents = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*(?:(?:\.|::)[A-Za-z_][A-Za-z0-9_]*)*", query))
         exact = []
         for ident in idents:
-            if len(ident) < 3 or not (re.search(r"[A-Z_.]", ident[1:]) or "::" in ident):
+            if len(ident) < 3 or not (re.search(r"[A-Z_.]", ident) or "::" in ident):
                 continue
-            for n in self.store.find_nodes_by_name(ident.replace("::", ".")):
-                exact.append((n["id"], 1.0))
-            rows = self.store.conn.execute("SELECT id FROM nodes WHERE qualname LIKE ? LIMIT 5",
-                                           (f"%.{ident.replace('::', '.')}",)).fetchall()
-            exact += [(r[0], 0.9) for r in rows]
-        add("symbol", exact)
+            name = ident.replace("::", ".")
+            hits = self.store.find_nodes_by_name(name)
+            # Case-sensitive suffix match on qualified names (GLOB, unlike LIKE, respects case).
+            hits += [dict(r) | {"attrs": {}, "suffix": True} for r in self.store.conn.execute(
+                "SELECT id, kind, file FROM nodes WHERE qualname GLOB ? LIMIT 8", (f"*.{name}",))]
+            for n in hits:
+                # Definitions outrank tests and modules that merely share the name.
+                rank = 1.0 if n["kind"] in ("class", "function", "method", "endpoint") else 0.8
+                if n.get("suffix"):
+                    rank *= 0.9
+                if (n.get("attrs") or {}).get("test") or n["kind"] == "test" or "/tests/" in f"/{n['file'] or ''}":
+                    rank *= 0.6
+                exact.append((n["id"], rank))
+        best: dict[str, float] = {}
+        for nid, rank in exact:
+            best[nid] = max(best.get(nid, 0.0), rank)
+        add("symbol", sorted(best.items(), key=lambda t: -t[1]))
         # 2. lexical BM25
         add("lexical", self.store.search(query, limit=60, kinds=kinds))
         # 3. semantic (ML tier only)
@@ -124,10 +135,42 @@ class Retriever:
                           "signals": {k: round(v, 3) for k, v in sig.items()}, "evidence": n["evidence"],
                           "status": n["status"]})
         fused.sort(key=lambda h: -h["score"])
+        llm = getattr(self.ws, "llm", None)
+        if llm is not None and fused and not getattr(self, "_in_llm", False):
+            fused = self._llm_rerank(query, fused, limit, kinds, llm)
         top = fused[0]["score"] if fused else 1
         for h in fused:
             h["score"] = round(h["score"] / top, 4)
         return fused[:limit]
+
+    def _llm_rerank(self, query: str, fused: list[dict[str, Any]], limit: int, kinds: list[str], llm: Any
+                    ) -> list[dict[str, Any]]:
+        """--llm mode: the model expands the question into identifiers, then re-ranks the candidates."""
+        from promapkin.llm.errors import LLMError
+        self._in_llm = True
+        try:
+            exp = llm.expand_query(query)
+            extra = " ".join(exp.get("identifiers", []) + exp.get("keywords", []))
+            if extra:
+                more = self.search(f"{query} {extra}", limit=40, kinds=kinds)
+                have = {h["id"] for h in fused}
+                fused += [h for h in more if h["id"] not in have]
+            pool = fused[:max(30, limit)]
+            cands = [{"id": h["id"], "kind": h["kind"],
+                      "summary": f"{h['name']} {h.get('location') or ''} {(self.store.node(h['id']) or {}).get('text') or ''}"}
+                     for h in pool]
+            ranking = dict(llm.rerank(query, cands))
+            for h in pool:
+                if h["id"] in ranking:
+                    h["signals"]["llm"] = round(ranking[h["id"]], 3)
+                    h["score"] = 0.35 * h["score"] / (pool[0]["score"] or 1) + 0.65 * ranking[h["id"]]
+            pool.sort(key=lambda h: -h["score"])
+            return pool + fused[len(pool):]
+        except LLMError:
+            llm.stats.fallbacks += 1
+            return fused
+        finally:
+            self._in_llm = False
 
     # ---------------------------------------------------------------- context compiler
     def build_context(self, task: str, budget: int | None = None, constraints: list[str] | None = None,

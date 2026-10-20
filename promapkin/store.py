@@ -142,6 +142,16 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     updated_at REAL NOT NULL
 );
 
+-- Cached LLM responses keyed by a hash of provider, model, task and the exact (redacted) input.
+CREATE TABLE IF NOT EXISTS llm_cache (
+    key TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    task TEXT NOT NULL,
+    response TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS artifacts (
     name TEXT PRIMARY KEY,
     revision TEXT,
@@ -181,10 +191,24 @@ class Store:
         self.conn.executescript(SCHEMA)
         if self.get_meta("schema_version") is None:
             self.set_meta("schema_version", str(SCHEMA_VERSION))
+        self._migrate()
         self._depth = 0
 
     def close(self) -> None:
         self.conn.close()
+
+    def _migrate(self) -> None:
+        """Forward-only schema migrations, applied on open."""
+        if self.get_meta("fts_rowid") != "1":
+            # v0.1 keyed full-text rows by an unindexed id column (quadratic deletes); rebuild keyed by rowid.
+            self.conn.execute("BEGIN IMMEDIATE")
+            self.conn.execute("DELETE FROM search")
+            for rowid, id_, kind, name, qual, file, text in self.conn.execute(
+                    "SELECT rowid, id, kind, name, qualname, file, text FROM nodes").fetchall():
+                self.conn.execute("INSERT INTO search(rowid, id, kind, name, body) VALUES (?,?,?,?,?)",
+                                  (rowid, id_, kind, searchable(name, qual), searchable(file, text)))
+            self.set_meta("fts_rowid", "1")
+            self.conn.execute("COMMIT")
 
     # ------------------------------------------------------------------ transactions
     @contextmanager
@@ -225,14 +249,18 @@ class Store:
 
     def forget_file(self, path: str) -> None:
         """Remove everything extracted from a file (before re-extraction or after deletion)."""
-        ids = [r[0] for r in self.conn.execute("SELECT id FROM nodes WHERE owner_file=?", (path,))]
+        rowids = [r[0] for r in self.conn.execute("SELECT rowid FROM nodes WHERE owner_file=?", (path,))]
         self.conn.execute("DELETE FROM nodes WHERE owner_file=?", (path,))
         self.conn.execute("DELETE FROM edges WHERE owner_file=?", (path,))
         self.conn.execute("DELETE FROM refs WHERE owner_file=?", (path,))
         self.conn.execute("DELETE FROM files WHERE path=?", (path,))
-        for chunk in _chunks(ids, 500):
+        self._unindex(rowids)
+
+    def _unindex(self, rowids: list[int]) -> None:
+        # The full-text table shares rowids with `nodes`, so deletes are index lookups, not scans.
+        for chunk in _chunks(rowids, 500):
             marks = ",".join("?" * len(chunk))
-            self.conn.execute(f"DELETE FROM search WHERE id IN ({marks})", chunk)
+            self.conn.execute(f"DELETE FROM search WHERE rowid IN ({marks})", chunk)
 
     # ------------------------------------------------------------------ nodes
     def upsert_node(
@@ -268,10 +296,11 @@ class Store:
             (id, kind, name, qualname, file, line_start, line_end, owner_file, evidence, confidence, status,
              revision, now, text, json.dumps(attrs or {}, sort_keys=True)),
         )
-        self.conn.execute("DELETE FROM search WHERE id=?", (id,))
+        rowid = self.conn.execute("SELECT rowid, file, text FROM nodes WHERE id=?", (id,)).fetchone()
+        self.conn.execute("DELETE FROM search WHERE rowid=?", (rowid[0],))
         self.conn.execute(
-            "INSERT INTO search(id, kind, name, body) VALUES (?,?,?,?)",
-            (id, kind, searchable(name, qualname), searchable(file, text)),
+            "INSERT INTO search(rowid, id, kind, name, body) VALUES (?,?,?,?,?)",
+            (rowid[0], id, kind, searchable(name, qualname), searchable(rowid[1], rowid[2])),
         )
 
     def node(self, id: str) -> dict[str, Any] | None:
@@ -304,11 +333,12 @@ class Store:
         self.conn.execute("UPDATE nodes SET status=? WHERE id=?", (status, id))
 
     def delete_nodes(self, where: str, params: Iterable[Any] = ()) -> int:
-        ids = [r[0] for r in self.conn.execute(f"SELECT id FROM nodes WHERE {where}", list(params))]
+        rows = self.conn.execute(f"SELECT id, rowid FROM nodes WHERE {where}", list(params)).fetchall()
+        ids = [r[0] for r in rows]
+        self._unindex([r[1] for r in rows])
         for chunk in _chunks(ids, 500):
             marks = ",".join("?" * len(chunk))
             self.conn.execute(f"DELETE FROM nodes WHERE id IN ({marks})", chunk)
-            self.conn.execute(f"DELETE FROM search WHERE id IN ({marks})", chunk)
             self.conn.execute(f"DELETE FROM edges WHERE src IN ({marks}) OR dst IN ({marks})", chunk + chunk)
         return len(ids)
 
@@ -370,9 +400,16 @@ class Store:
             (owner_file, src, target, type, line, json.dumps(context or {}, sort_keys=True)),
         )
 
-    def refs(self) -> list[dict[str, Any]]:
+    def refs(self, files: Iterable[str] | None = None) -> list[dict[str, Any]]:
         out = []
-        for r in self.conn.execute("SELECT * FROM refs"):
+        if files is None:
+            rows = self.conn.execute("SELECT * FROM refs").fetchall()
+        else:
+            rows = []
+            for chunk in _chunks(sorted(files), 400):
+                marks = ",".join("?" * len(chunk))
+                rows += self.conn.execute(f"SELECT * FROM refs WHERE owner_file IN ({marks})", chunk).fetchall()
+        for r in rows:
             d = dict(r)
             d["context"] = json.loads(d["context"])
             out.append(d)

@@ -33,11 +33,33 @@ def _interactive(args: argparse.Namespace) -> bool:
     return sys.stdin.isatty() and sys.stderr.isatty() and not getattr(args, "json", False)
 
 
+EXPLAIN = {"graph", "context", "verify", "blueprint", "handoff", "status", "bench", "review"}
+
+
 def emit(args: argparse.Namespace, data: Any, human: Any = None) -> None:
+    engine = getattr(args, "_engine", None)
+    explanation = None
+    if engine is not None and not args.no_explain and args.cmd in EXPLAIN and not getattr(args, "_explained", False):
+        from promapkin.llm.errors import LLMError
+        try:
+            explanation = engine.explain(_command_name(args), data)
+        except LLMError as exc:
+            explanation = f"(LLM explanation unavailable: {exc})"
+        args._explained = True
     if args.json or human is None:
+        if explanation is not None and isinstance(data, dict):
+            data = {**data, "llm_explanation": explanation}
         print(json.dumps(data, indent=2, default=str))
     else:
         print(human(data) if callable(human) else human)
+        if explanation:
+            print(f"\n── {engine.label} ──\n{explanation.strip()}")
+
+
+def _command_name(args: argparse.Namespace) -> str:
+    parts = [args.cmd] + [str(getattr(args, a)) for a in ("bp_cmd", "graph_cmd", "ctx_cmd", "ho_cmd")
+                          if getattr(args, a, None)]
+    return "promapkin " + " ".join(parts)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +69,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--root", default=os.environ.get("PROMAPKIN_ROOT", "."), help="repository root (default: cwd)")
     p.add_argument("--json", action="store_true", help="machine-readable JSON output")
     p.add_argument("--agent", default=os.environ.get("PROMAPKIN_AGENT", "cli"), help="agent name for provenance")
+    llm = p.add_argument_group("LLM mode", "Use an LLM instead of regex/heuristic analysis in every command "
+                                            "(sends repository excerpts to the provider; see docs/LLM.md)")
+    llm.add_argument("--llm", nargs="?", const="default", default=os.environ.get("PROMAPKIN_LLM"),
+                     choices=["default", "anthropic", "openai"], help="enable LLM mode (provider optional)")
+    llm.add_argument("--model", help="model id (default from config: anthropic_model / openai_model)")
+    llm.add_argument("--base-url", help="API base URL (OpenAI-compatible endpoints, gateways, proxies)")
+    llm.add_argument("--api-key", help="API key for this run (prefer env vars or `promapkin auth set`)")
+    llm.add_argument("--no-explain", action="store_true", help="in LLM mode, skip the narrative explanation")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init", help="create .promapkin/ in the repository")
@@ -90,6 +120,15 @@ def build_parser() -> argparse.ArgumentParser:
     tr.add_argument("--from", dest="src", required=True)
     tr.add_argument("--to", dest="dst", required=True)
     tr.add_argument("-k", type=int, default=3)
+    tr.add_argument("--mode", default="auto", choices=["auto", "flow", "structural", "related"])
+    hb = grs.add_parser("hubs", help="most-connected symbols (god nodes)")
+    hb.add_argument("--limit", type=int, default=25)
+    grs.add_parser("communities", help="module communities")
+    sp = grs.add_parser("surprises", help="rare observed links between communities")
+    sp.add_argument("--limit", type=int, default=20)
+    hx = grs.add_parser("html", help="write an interactive HTML graph explorer")
+    hx.add_argument("--out")
+    hx.add_argument("--max-nodes", type=int, default=1500)
     df = grs.add_parser("dataflow", help="data paths from a node to sinks")
     df.add_argument("ref")
     dp = grs.add_parser("deps", help="module dependencies and cycles")
@@ -201,6 +240,39 @@ def build_parser() -> argparse.ArgumentParser:
     ba.add_argument("--budget", type=int, default=4000)
     ba.add_argument("--keep", action="store_true")
     bes.add_parser("example-spec", help="print an example agent benchmark spec")
+
+    ak = sub.add_parser("ask", help="ask a question; an LLM answers using Promapkin's tools (implies --llm)")
+    ak.add_argument("question")
+    ak.add_argument("--allow-writes", action="store_true", help="let the LLM record findings/maps/handoffs")
+    ak.add_argument("--max-steps", type=int, default=12)
+    rv = sub.add_parser("review", help="review the working tree (or a diff against --base) using the graph")
+    rv.add_argument("--base", help="git ref to diff against (default: uncommitted changes)")
+
+    au = sub.add_parser("auth", help="LLM provider credentials (stored outside the repository, mode 0600)")
+    aus = au.add_subparsers(dest="auth_cmd", required=True)
+    a1 = aus.add_parser("set", help="store an API key (read from stdin or prompted)")
+    a1.add_argument("provider", choices=["anthropic", "openai"])
+    a1.add_argument("--base-url", dest="auth_base_url", help="remember a base URL for this provider")
+    a2 = aus.add_parser("remove")
+    a2.add_argument("provider", choices=["anthropic", "openai"])
+    aus.add_parser("status")
+
+    pa = sub.add_parser("parsers", help="optional real parsers: TypeScript compiler and tree-sitter grammars")
+    pas = pa.add_subparsers(dest="parsers_cmd", required=True)
+    pas.add_parser("status")
+    pi = pas.add_parser("install", help="install parsers into Promapkin's cache (asks first)")
+    pi.add_argument("which", nargs="?", default="all", choices=["all", "typescript", "tree-sitter"])
+    pi.add_argument("--yes", action="store_true")
+
+    tr = sub.add_parser("trace", help="runtime evidence: run YOUR command with tracing, then ingest it")
+    trs = tr.add_subparsers(dest="trace_cmd", required=True)
+    t1 = trs.add_parser("run", help="e.g. promapkin trace run -- python -m pytest -q")
+    t1.add_argument("--kind", default="auto", choices=["auto", "python", "node"])
+    t1.add_argument("command", nargs=argparse.REMAINDER)
+    t2 = trs.add_parser("ingest", help="ingest an existing trace directory")
+    t2.add_argument("directory")
+
+    sub.add_parser("doctor", help="check the environment: git, parsers, ML models, LLM credentials, index")
     return p
 
 
@@ -218,6 +290,7 @@ def _handoff_fields(p: argparse.ArgumentParser, task_required: bool = True) -> N
     p.add_argument("--next", dest="next_action")
     p.add_argument("--validation", action="append", default=[])
     p.add_argument("--question", action="append", default=[])
+    p.add_argument("--notes", help="free-form notes (or @file); in --llm mode the LLM structures them")
 
 
 def _handoff_body(a: argparse.Namespace) -> dict[str, Any]:
@@ -291,7 +364,7 @@ def fmt_trace(r: dict[str, Any]) -> str:
         return f"no path from {r['from']['id']} to {r['to']['id']}"
     lines = []
     for p in r["paths"]:
-        lines.append(f"path trust {p['trust']:.3f} ({p['basis']}):")
+        lines.append(f"path trust {p['trust']:.3f} ({p['basis']}, {p.get('mode', 'flow')} mode): {p.get('summary', '')}")
         for st in p["steps"]:
             lines.append(f"  {st['source']} -{st['type']}-> {st['target']}  [{st['evidence']}] {st.get('at', '')}")
     return "\n".join(lines)
@@ -369,18 +442,54 @@ def fmt_handoff(r: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _attach_llm(args: argparse.Namespace, ws: Workspace) -> None:
+    needs = args.cmd in ("ask",)
+    if not args.llm and not needs:
+        return
+    from promapkin import llm
+    if not ws.initialized:
+        ws.init()
+    engine = llm.make_engine(ws, provider=None if args.llm in (None, "default") else args.llm, model=args.model,
+                             base_url=args.base_url, api_key=args.api_key)
+    ws.llm = engine  # type: ignore[attr-defined]
+    args._engine = engine
+
+
+def _usage_line(args: argparse.Namespace) -> None:
+    engine = getattr(args, "_engine", None)
+    if engine is None or args.json:
+        return
+    d = engine.describe()
+    print(f"[{engine.label}] {d['calls']} call(s), {d['cached']} cached · {d['input_tokens']:,} in / "
+          f"{d['output_tokens']:,} out tokens · {d['fallbacks']} fallback(s) · {d['redactions']} secret(s) "
+          f"redacted · {d['dropped_ungrounded']} ungrounded fact(s) dropped", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     ws = Workspace(Path(args.root))
+    from promapkin.llm.errors import LLMError, LLMUnavailable
     try:
+        _attach_llm(args, ws)
         return _run(args, ws)
+    except LLMUnavailable as exc:
+        print(f"error: LLM mode unavailable: {exc}\n  set the API key (e.g. `promapkin auth set anthropic`) or "
+              f"install the SDKs: pip install 'promapkin[llm]'", file=sys.stderr)
+        return 2
+    except LLMError as exc:
+        print(f"error: LLM request failed: {exc}", file=sys.stderr)
+        return 2
     except VersionConflict as exc:
         print(f"conflict: {exc}", file=sys.stderr)
         return 3
     except (ServiceError, KnowledgeError, HandoffError, PathOutsideRepository, LookupError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    except KeyboardInterrupt:
+        print("interrupted; the index is unchanged (scans are transactional)", file=sys.stderr)
+        return 130
     finally:
+        _usage_line(args)
         ws.close()
 
 
@@ -436,6 +545,10 @@ def _run(args: argparse.Namespace, ws: Workspace) -> int:
         return 0
     if cmd == "models":
         return _models(args, ws)
+    if cmd == "auth":
+        return _auth(args)
+    if cmd == "parsers":
+        return _parsers(args, ws)
 
     svc = Service(ws, agent=args.agent)
     if cmd == "scan":
@@ -485,6 +598,31 @@ def _run(args: argparse.Namespace, ws: Workspace) -> int:
         else:
             r = svc.submit_analysis(args.task_id, json.loads(Path(args.file).read_text()))
         emit(args, r)
+    elif cmd == "ask":
+        from promapkin.llm.agent import ask
+        r = ask(ws, args._engine, args.question, allow_writes=args.allow_writes, max_steps=args.max_steps,
+                on_step=None if args.json else (lambda m: print(m, file=sys.stderr)))
+        emit(args, r, lambda d: d["answer"])
+    elif cmd == "review":
+        from promapkin.llm.agent import review
+        r = review(ws, getattr(args, "_engine", None), args.base)
+        emit(args, r, _fmt_review)
+    elif cmd == "trace":
+        from promapkin import runtime
+        if args.trace_cmd == "run":
+            command = args.command[1:] if args.command[:1] == ["--"] else args.command
+            r = runtime.run(ws, command, kind=args.kind)
+        else:
+            r = runtime.ingest(ws, Path(args.directory))
+        emit(args, r, lambda d: (f"trace {d['trace']}: {d['runtime_edges']} runtime call edges "
+                                 f"({d['dynamic_link_count']} not visible statically), {d['test_links']} "
+                                 f"test→code links, {d['executed_nodes']} executed symbols") +
+             "".join(f"\n  dynamic: {x['source']} -> {x['target']}" for x in d["dynamic_links"][:15]))
+    elif cmd == "doctor":
+        r = _doctor(ws)
+        emit(args, r, lambda d: "\n".join(f"{'ok ' if c['ok'] else '!! '} {c['check']:<26} {c['detail']}"
+                                           for c in d["checks"]))
+        return 0 if all(c["ok"] or c.get("optional") for c in r["checks"]) else 1
     elif cmd == "bench":
         from promapkin import bench
         if args.bench_cmd == "example-spec":
@@ -498,6 +636,116 @@ def _run(args: argparse.Namespace, ws: Workspace) -> int:
             r = bench.agent_benchmark(ws, spec, budget=args.budget, keep=args.keep)
             emit(args, r)
     return 0
+
+
+def _fmt_review(r: dict[str, Any]) -> str:
+    lines = [f"Review of {r['base']}: {len(r['files_changed'])} file(s), {len(r['changed_symbols'])} changed symbol(s)"]
+    for i in r["impact"][:15]:
+        lines.append(f"  {i['symbol']} ({i['location']}) → {i['total_affected']} affected")
+    if r["tests_to_run"]:
+        lines.append("tests to run:")
+        lines += [f"  {t['id']}  {t['location'] or ''}" for t in r["tests_to_run"][:25]]
+    if r["decisions_to_respect"]:
+        lines.append("decisions to respect:")
+        lines += [f"  {d['id']}: {d['summary']}" for d in r["decisions_to_respect"]]
+    lr = r.get("llm_review")
+    if lr:
+        lines += ["", f"LLM review: {lr.get('summary', '')}"]
+        for f in lr.get("findings", []):
+            lines.append(f"  [{f['severity']}] {f['file']}:{f['line']} {f['issue']}")
+            if f.get("suggestion"):
+                lines.append(f"      → {f['suggestion']}")
+        for t in lr.get("missing_tests", []):
+            lines.append(f"  missing test: {t}")
+    if r.get("llm_error"):
+        lines.append(f"(LLM review unavailable: {r['llm_error']})")
+    return "\n".join(lines)
+
+
+def _auth(args: argparse.Namespace) -> int:
+    from promapkin import credentials
+    if args.auth_cmd == "status":
+        for prov, st in credentials.status().items():
+            print(f"{prov:<10} {'configured' if st['configured'] else 'not configured':<15} {st['key']:<14} "
+                  f"(source: {st['source']})")
+        print(f"store: {credentials.store_path()}")
+        return 0
+    if args.auth_cmd == "remove":
+        print("removed" if credentials.remove(args.provider) else "nothing stored")
+        return 0
+    if sys.stdin.isatty():
+        import getpass
+        key = getpass.getpass(f"{args.provider} API key: ")
+    else:
+        key = sys.stdin.readline()
+    if not key.strip():
+        print("error: empty key", file=sys.stderr)
+        return 2
+    path = credentials.set_key(args.provider, key, args.auth_base_url)
+    print(f"stored {args.provider} key in {path} (mode 0600)")
+    return 0
+
+
+def _parsers(args: argparse.Namespace, ws: Workspace) -> int:
+    from promapkin import toolchain
+    if args.parsers_cmd == "status":
+        emit(args, toolchain.status(ws.root))
+        return 0
+    if not args.yes and not _ask(f"Install {args.which} parser(s) into {toolchain.cache_dir()}? "
+                                 "(npm for TypeScript, pip for tree-sitter)"):
+        print("cancelled")
+        return 0
+    ok = True
+    if args.which in ("all", "typescript"):
+        good, msg = toolchain.install_typescript()
+        ok &= good
+        print(msg)
+    if args.which in ("all", "tree-sitter"):
+        good, msg = toolchain.install_tree_sitter()
+        ok &= good
+        print(msg)
+    return 0 if ok else 1
+
+
+def _doctor(ws: Workspace) -> dict[str, Any]:
+    import importlib.util
+    import shutil as _sh
+    from promapkin import credentials, toolchain, ml
+    checks = []
+
+    def add(check: str, ok: bool, detail: str, optional: bool = False) -> None:
+        checks.append({"check": check, "ok": ok, "detail": detail, "optional": optional})
+
+    add("python", sys.version_info >= (3, 10), sys.version.split()[0])
+    add("git", bool(_sh.which("git")), _sh.which("git") or "not found (revision tracking disabled)")
+    add("workspace", ws.initialized, str(ws.dir) if ws.initialized else "run `promapkin init`")
+    if ws.initialized:
+        try:
+            integrity = ws.store.conn.execute("PRAGMA quick_check").fetchone()[0]
+            add("index integrity", integrity == "ok", integrity)
+            add("index", bool(ws.store.get_meta("indexed_revision")),
+                ws.store.get_meta("indexed_revision") or "not indexed (promapkin scan)")
+        except Exception as exc:  # noqa: BLE001
+            add("index integrity", False, str(exc))
+    st = toolchain.status(ws.root)
+    add("javascript/typescript parser", st["javascript_typescript"] == "typescript-compiler",
+        f"{st['javascript_typescript']} {st['typescript_version'] or ''} (promapkin parsers install typescript)",
+        optional=True)
+    add("other-language parser", st["tree_sitter"], f"{st['other_languages']} (promapkin parsers install tree-sitter)",
+        optional=True)
+    mm = ml.manager(ws).status()
+    neural = any(b["installed"] and b["cached"] for b in mm["backends"])
+    add("neural embedding model", neural, "cached" if neural else "built-in tier (promapkin models download)",
+        optional=True)
+    for prov in ("anthropic", "openai"):
+        sdk = importlib.util.find_spec(prov) is not None
+        st_ = credentials.status()[prov]
+        add(f"{prov} LLM", sdk and st_["configured"],
+            f"sdk {'installed' if sdk else 'missing (pip install promapkin[llm])'}, key {st_['source']}",
+            optional=True)
+    add("numpy (fast vector math)", importlib.util.find_spec("numpy") is not None, "optional speed-up",
+        optional=True)
+    return {"checks": checks}
 
 
 def _fmt_bench(r: dict[str, Any]) -> str:
@@ -523,7 +771,23 @@ def _graph(args: argparse.Namespace, svc: Service) -> int:
     elif c == "impact":
         emit(args, svc.impact(args.ref, args.depth, args.min_trust), fmt_impact)
     elif c == "trace":
-        emit(args, svc.trace(args.src, args.dst, k=args.k), fmt_trace)
+        emit(args, svc.trace(args.src, args.dst, k=args.k, mode=args.mode), fmt_trace)
+    elif c == "hubs":
+        emit(args, svc.hubs(args.limit), lambda d: "\n".join(
+            f"{h['fan_in']:>5} in {h['fan_out']:>5} out  {h['kind']:<9} {h['id']}  {h['location'] or ''}"
+            for h in d["hubs"]))
+    elif c == "communities":
+        emit(args, svc.communities(), lambda d: "\n".join(
+            f"{c['component']:<32} {len(c['modules']):>4} modules  conf {c['confidence']:.2f}  ({c['method']})"
+            for c in d["communities"]))
+    elif c == "surprises":
+        emit(args, svc.surprises(args.limit), lambda d: "\n".join(
+            [f"{d['communities']} communities; {d['policy']}"] +
+            [f"  {x['source']} -{x['type']} [{x['evidence']}]-> {x['target']}  ({x['why']})"
+             for x in d["connections"]]))
+    elif c == "html":
+        emit(args, svc.export_html(args.out, args.max_nodes),
+             lambda d: f"wrote {d['path']} ({d['nodes']} nodes, {d['edges']} edges, {d['communities']} communities)")
     elif c == "dataflow":
         emit(args, svc.dataflow(args.ref), fmt_flows)
     elif c == "deps":
@@ -548,7 +812,19 @@ def _graph(args: argparse.Namespace, svc: Service) -> int:
 def _handoff(args: argparse.Namespace, svc: Service) -> int:
     c = args.ho_cmd
     if c == "create":
-        emit(args, svc.create_handoff(_handoff_body(args), args.parent), fmt_handoff)
+        body = _handoff_body(args)
+        engine = getattr(args, "_engine", None)
+        if getattr(args, "notes", None):
+            notes = Path(args.notes[1:]).read_text() if args.notes.startswith("@") else args.notes
+            if engine is not None:
+                ctx = svc.context(body.get("task") or notes[:200], budget=1500, include_source=False)
+                draft = engine.draft_handoff(notes, {"facts": ctx["facts"][:30]})
+                for k, v in draft.items():   # explicit flags win over the draft
+                    if v and not body.get(k):
+                        body[k] = v
+            else:
+                body.setdefault("summary", notes[:2000])
+        emit(args, svc.create_handoff(body, args.parent), fmt_handoff)
     elif c == "update":
         emit(args, svc.update_handoff(args.id, _handoff_body(args), args.expected_version), fmt_handoff)
     elif c == "resume":

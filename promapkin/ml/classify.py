@@ -416,6 +416,40 @@ class HybridClassifier:
             return Classification(m_label, m_conf * 0.9, f"{tier}>heuristic", self.model_name, False, [rule_alt])
         return Classification(r_label, r_conf * 0.9, f"heuristic>{tier}", "rules", False, [model_alt])
 
+    def classify_many(self, task_name: str, texts: list[str], llm: Any = None) -> list[Classification]:
+        """Classify a batch. With an LLM engine (--llm mode) the LLM replaces rules and models; items it cannot
+        answer fall back to the regular two-tier classifier. Results are cached per item."""
+        if llm is None:
+            return [self.classify(task_name, t) for t in texts]
+        tier = f"llm:{llm.label}"
+        out: list[Classification | None] = [None] * len(texts)
+        todo: list[int] = []
+        for i, t in enumerate(texts):
+            key = hashlib.sha1(t.encode()).hexdigest()
+            hit = self.cache.cached_classification(task_name, key, tier) if self.cache is not None else None
+            if hit:
+                out[i] = Classification(hit["label"], hit["confidence"], "llm", hit["model"], None,
+                                        hit["detail"].get("alternatives", []))
+            else:
+                todo.append(i)
+        if todo:
+            try:
+                answers = llm.classify_many(task_name, [texts[i] for i in todo])
+            except Exception:  # noqa: BLE001 - any LLM failure falls back to the classifier
+                answers = [None] * len(todo)
+            for i, a in zip(todo, answers):
+                if a is None:
+                    out[i] = self.classify(task_name, texts[i])
+                    continue
+                c = Classification(a["label"], a["confidence"], "llm", llm.label, None,
+                                   [{"reason": a.get("reason", "")}] if a.get("reason") else [])
+                out[i] = c
+                if self.cache is not None:
+                    self.cache.cache_classification(task_name, hashlib.sha1(texts[i].encode()).hexdigest(), tier,
+                                                    c.label, c.confidence, llm.label,
+                                                    {"tier": "llm", "alternatives": c.alternatives})
+        return [c for c in out if c is not None]
+
     def add_example(self, task_name: str, text: str, label: str) -> Path:
         if task_name not in TASKS or label not in TASKS[task_name].labels:
             raise ValueError(f"unknown task/label: {task_name}/{label}")

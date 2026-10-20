@@ -17,6 +17,8 @@ DOCUMENTATION = "documentation"  # claims made by docs, ADRs, comments
 NAME_MATCH = "name_match"        # resolved only by matching an unqualified name
 HEURISTIC = "heuristic"          # rule-based interpretation of structural facts
 ML_CLASSIFIER = "ml_classifier"  # statistical classifier / embedding model over structural facts
+LLM_EXTRACTION = "llm_extraction"  # structure read from source by an LLM and grounded against the text
+LLM_INFERENCE = "llm_inference"  # interpretation (classification, synthesis) produced by an LLM
 AGENT_INFERENCE = "agent_inference"  # conclusions produced by an AI agent
 HANDOFF = "handoff"              # recorded by an agent in a handoff
 UNKNOWN = "unknown"
@@ -31,6 +33,8 @@ WEIGHTS: dict[str, float] = {
     NAME_MATCH: 0.6,
     HEURISTIC: 0.55,
     ML_CLASSIFIER: 0.6,
+    LLM_EXTRACTION: 0.7,
+    LLM_INFERENCE: 0.6,
     HANDOFF: 0.6,
     AGENT_INFERENCE: 0.45,
     UNKNOWN: 0.2,
@@ -47,6 +51,8 @@ CLASS_OF: dict[str, str] = {
     NAME_MATCH: "inferred",
     HEURISTIC: "inferred",
     ML_CLASSIFIER: "inferred",
+    LLM_EXTRACTION: "observed",
+    LLM_INFERENCE: "inferred",
     HANDOFF: "reported",
     AGENT_INFERENCE: "inferred",
     UNKNOWN: "unknown",

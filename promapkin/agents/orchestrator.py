@@ -128,7 +128,20 @@ def _run_specialist(ctx: sp.Ctx, name: str, goal: str | None) -> dict[str, Any]:
     if name == "verification":
         return sp.verification(ctx)
     if name == "roadmap":
-        return sp.roadmap(ctx, goal)
+        plan = sp.roadmap(ctx, goal)
+        llm = getattr(ctx.ws, "llm", None)
+        if llm is not None and plan.get("steps") and goal:
+            from promapkin.llm.errors import LLMError
+            try:
+                refined = llm.refine_roadmap(plan, {"constraints": plan.get("constraints", [])})
+                valid = {s for st in plan["steps"] for s in st.get("components", [])}
+                for st in refined.get("steps", []):   # components must exist in the deterministic plan or graph
+                    st["components"] = [c for c in st.get("components", []) if c in valid or ctx.store.node(c)]
+                plan["llm_plan"] = {**refined, "model": llm.label,
+                                    "note": "LLM refinement of the deterministic plan above (inferred)"}
+            except LLMError as exc:
+                plan["llm_error"] = str(exc)
+        return plan
     raise ValueError(f"unknown section {name}")
 
 

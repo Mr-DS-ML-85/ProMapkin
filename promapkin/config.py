@@ -30,6 +30,19 @@ class Config:
     ml_backend: str = "auto"          # auto | fastembed | sentence-transformers | builtin
     ml_model: str = ""                # override the embedding model name
     ml_consent: str = ""              # "", "granted" or "declined" (remembered answer to the download prompt)
+    # LLM mode (`--llm`) and LLM-backed external agents (provider "anthropic" / "openai").
+    llm_provider: str = "anthropic"   # default provider for --llm with no value
+    anthropic_model: str = "claude-opus-5-5"
+    anthropic_base_url: str = ""      # gateway/proxy; empty = Anthropic API
+    anthropic_api_key_env: str = "ANTHROPIC_API_KEY"
+    openai_model: str = "gpt-5"
+    openai_base_url: str = ""         # any OpenAI-compatible endpoint (Azure gateway, vLLM, Ollama, LM Studio)
+    openai_api_key_env: str = "OPENAI_API_KEY"
+    openai_reasoning_effort: str = ""  # low | medium | high for reasoning models; empty = model default
+    llm_max_calls: int = 2000         # per command invocation
+    llm_concurrency: int = 4
+    llm_timeout: float = 300.0
+    llm_fallbacks: bool = True        # Anthropic server-side refusal fallback (first-party API only)
     layers: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod

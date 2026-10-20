@@ -14,7 +14,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from promapkin import evidence as ev
-from promapkin.ml.embedders import normalize, pack, top_k, unpack
+from promapkin.ml.embedders import _np, normalize, pack, top_k, unpack
 from promapkin.store import Store, split_identifier
 
 STRUCTURAL_EDGES = ["calls", "imports", "inherits", "implements", "depends_on", "instantiates", "contains",
@@ -38,6 +38,40 @@ def propagate(store: Store, base_model: str, alpha: float = 0.5, iterations: int
         if e["src"] in base and e["dst"] in base:
             adj[e["src"]].add(e["dst"])
             adj[e["dst"]].add(e["src"])
+    if _np is not None:
+        h = _propagate_numpy(base, adj, alpha, iterations)
+    else:
+        h = _propagate_python(base, adj, alpha, iterations)
+    name = graph_model_name(base_model)
+    store.conn.execute("DELETE FROM embeddings WHERE model=?", (name,))
+    store.conn.executemany("INSERT OR REPLACE INTO embeddings(id, model, sha, vec) VALUES (?,?,?,?)",
+                           ((nid, name, "propagated", vec.astype("float32").tobytes() if hasattr(vec, "astype")
+                             else pack(vec)) for nid, vec in h.items()))
+    return len(h)
+
+
+def _propagate_numpy(base: dict[str, list[float]], adj: dict[str, set[str]], alpha: float, iterations: int
+                     ) -> dict[str, Any]:
+    ids = list(base)
+    index = {nid: i for i, nid in enumerate(ids)}
+    h0 = _np.asarray([base[i] for i in ids], dtype=_np.float32)
+    src = _np.fromiter((index[a] for a, bs in adj.items() for _ in bs), dtype=_np.int64)
+    dst = _np.fromiter((index[b] for a, bs in adj.items() for b in bs), dtype=_np.int64)
+    deg = _np.bincount(src, minlength=len(ids)).astype(_np.float32)
+    h = h0
+    for _ in range(iterations):
+        agg = _np.zeros_like(h0)
+        _np.add.at(agg, src, h[dst])
+        has = deg > 0
+        mixed = h0.copy()
+        mixed[has] = (1 - alpha) * h0[has] + alpha * agg[has] / deg[has, None]
+        norms = _np.linalg.norm(mixed, axis=1, keepdims=True)
+        h = mixed / _np.where(norms == 0, 1, norms)
+    return {nid: h[i] for i, nid in enumerate(ids)}
+
+
+def _propagate_python(base: dict[str, list[float]], adj: dict[str, set[str]], alpha: float, iterations: int
+                      ) -> dict[str, list[float]]:
     h = dict(base)
     for _ in range(iterations):
         nxt = {}
@@ -55,11 +89,7 @@ def propagate(store: Store, base_model: str, alpha: float = 0.5, iterations: int
             k = len(nbrs)
             nxt[nid] = normalize([(1 - alpha) * h0[i] + alpha * mean[i] / k for i in range(dim)])
         h = nxt
-    name = graph_model_name(base_model)
-    store.conn.execute("DELETE FROM embeddings WHERE model=?", (name,))
-    for nid, vec in h.items():
-        store.put_embedding(nid, name, "propagated", pack(vec))
-    return len(h)
+    return h
 
 
 def similarity_edges(store: Store, model: str | None, k: int = 3, threshold: float = 0.82,
@@ -76,8 +106,8 @@ def similarity_edges(store: Store, model: str | None, k: int = 3, threshold: flo
     seen: set[tuple[str, str]] = set()
     if model:
         items = [(nid, v) for nid, v in store.embeddings(model) if nid in nodes]
-        for nid, blob in items:
-            for other, sim in top_k(unpack(blob), items, k + 1):
+        for nid, neighbours in _all_top_k(items, k + 1):
+            for other, sim in neighbours:
                 if other == nid or sim < threshold or _same_module(nid, other) or \
                         nodes[nid]["kind"] != nodes[other]["kind"]:
                     continue
@@ -113,6 +143,25 @@ def similarity_edges(store: Store, model: str | None, k: int = 3, threshold: flo
     return count
 
 
+def _all_top_k(items: list[tuple[str, bytes]], k: int) -> list[tuple[str, list[tuple[str, float]]]]:
+    """Top-k cosine neighbours for every item: one blocked matrix product with numpy, else pairwise."""
+    if not items:
+        return []
+    if _np is None:
+        return [(nid, top_k(unpack(blob), items, k)) for nid, blob in items]
+    ids = [i for i, _ in items]
+    mat = _np.frombuffer(b"".join(v for _, v in items), dtype=_np.float32).reshape(len(items), -1)
+    out = []
+    kk = min(k, len(ids))
+    for start in range(0, len(ids), 1024):
+        block = mat[start:start + 1024] @ mat.T
+        part = _np.argpartition(-block, kk - 1, axis=1)[:, :kk]
+        for r in range(block.shape[0]):
+            cols = part[r][_np.argsort(-block[r, part[r]])]
+            out.append((ids[start + r], [(ids[c], float(block[r, c])) for c in cols]))
+    return out
+
+
 def _same_module(a: str, b: str) -> bool:
     """Same module, or a package and its own submodule (trivially similar, not informative)."""
     ma = a.split(":")[1] if a.count(":") >= 1 else a
@@ -127,20 +176,31 @@ def disambiguate(store: Store, ambiguous: list[dict[str, Any]], model: str | Non
     ML: pick the candidate closest to the caller in graph-embedding space when the margin is clear.
     Heuristic: pick the only candidate whose module the caller's module imports (static confidence)."""
     vecs = {nid: unpack(v) for nid, v in store.embeddings(model)} if model else {}
+    imports_of: dict[str, set[str]] = {}
     resolved = 0
     for amb in ambiguous:
-        src, cands = amb["src"], amb["candidates"]
+        src = amb["src"]
+        cands = [c for c in dict.fromkeys(amb["candidates"]) if c != src]
+        if not cands:
+            continue
         choice, conf, evidence, method = None, 0.0, ev.HEURISTIC, ""
         if vecs and src in vecs and all(c in vecs for c in cands):
             sims = sorted(((sum(a * b for a, b in zip(vecs[src], vecs[c])), c) for c in cands), reverse=True)
-            margin = sims[0][0] - sims[1][0]
-            if margin > 0.04:
-                choice, conf, evidence = sims[0][1], round(min(0.75, 0.4 + margin * 2), 3), ev.ML_CLASSIFIER
-                method = f"graph-embedding similarity (margin {margin:.3f})"
+            if len(sims) == 1:
+                # A single remaining candidate still needs semantic support before we link it.
+                if sims[0][0] > 0.4:
+                    choice, conf, evidence = sims[0][1], round(min(0.7, 0.3 + sims[0][0] * 0.4), 3), ev.ML_CLASSIFIER
+                    method = f"graph-embedding similarity {sims[0][0]:.3f} (single candidate)"
+            else:
+                margin = sims[0][0] - sims[1][0]
+                if margin > 0.04:
+                    choice, conf, evidence = sims[0][1], round(min(0.75, 0.4 + margin * 2), 3), ev.ML_CLASSIFIER
+                    method = f"graph-embedding similarity (margin {margin:.3f})"
         if choice is None:
             src_mod = "module:" + src.split(":")[1] if src.count(":") >= 2 else src
-            imported = {e["dst"] for e in store.edges(src=src_mod, types=["imports"])}
-            hits = [c for c in cands if "module:" + c.split(":")[1] in imported]
+            if src_mod not in imports_of:
+                imports_of[src_mod] = {e["dst"] for e in store.edges(src=src_mod, types=["imports"])}
+            hits = [c for c in cands if c.count(":") >= 2 and "module:" + c.split(":")[1] in imports_of[src_mod]]
             if len(hits) == 1:
                 choice, conf, evidence, method = hits[0], STATIC_DISAMBIGUATION_CONFIDENCE, ev.HEURISTIC, \
                     "only candidate in an imported module"

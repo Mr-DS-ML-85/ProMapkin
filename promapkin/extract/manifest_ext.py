@@ -91,9 +91,13 @@ def extract(path: str, text: str) -> Facts:
         except Exception as exc:  # noqa: BLE001
             facts.errors.append(str(exc))
             return facts
+        crate = (data.get("package") or {}).get("name")
+        if crate:
+            facts.nodes[0].setdefault("attrs", {})["crate"] = crate
         for scope in ("dependencies", "dev-dependencies"):
             for d, v in (data.get(scope) or {}).items():
-                dep(d, v if isinstance(v, str) else str(v.get("version", "")), scope, "cargo")
+                dep(d, v if isinstance(v, str) else str((v or {}).get("version", "") if isinstance(v, dict) else v),
+                    scope, "cargo")
     elif name == ".env.example":
         for m in re.finditer(r"^\s*([A-Z_][A-Z0-9_]*)\s*=", text, re.M):
             facts.node(f"config:{m.group(1)}", "config", m.group(1), ev.MANIFEST, attrs={"source": "environment"})

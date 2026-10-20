@@ -294,6 +294,18 @@ def _md_roadmap(s: dict[str, Any]) -> list[str]:
             out.append(f"   - {st['detail']}")
         for v in st.get("validation", []):
             out.append(f"   - ✔ {v}")
+    if s.get("llm_plan"):
+        lp = s["llm_plan"]
+        out += ["", f"## LLM-refined plan ({lp['model']}, inferred)", "", lp.get("summary", ""), ""]
+        for i, st in enumerate(lp.get("steps", []), start=1):
+            pre = f" (after {', '.join(map(str, st.get('prerequisites', [])))})" if st.get("prerequisites") else ""
+            out.append(f"{i}. **{st['title']}**{pre} — risk: {st.get('risk', '?')}")
+            if st.get("detail"):
+                out.append(f"   - {st['detail']}")
+            for v in st.get("validation", []):
+                out.append(f"   - ✔ {v}")
+        for r in lp.get("risks", []):
+            out.append(f"- risk: {r}")
     if s.get("risk_assessment"):
         ra = s["risk_assessment"]
         out += ["", "## Risk assessment", "", f"- overall: {ra['overall']}",

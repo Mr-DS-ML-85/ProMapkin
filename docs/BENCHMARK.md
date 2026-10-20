@@ -57,6 +57,21 @@ Observations:
   manifest parsing. These are the cases neural embeddings target. Re-run the spec after
   `promapkin models download` to measure that tier. It has not been measured yet.
 
+### Real repositories (v0.2)
+
+An external audit of v0.1 found that scans crashed (`IndexError` in disambiguation), that fastapi took 310 s, and
+that Rust code was invisible. The same repositories measured on v0.2 in this environment (numpy installed, no
+neural model, `PROMAPKIN_TIMINGS=1` prints per-phase times):
+
+| Repository | Files | Scan | Notes |
+|---|---|---|---|
+| fastapi/fastapi | 2,886 | 36.5 s | extract 12.5 s · resolve 1.9 s · classify 6.1 s · embed 6.5 s · propagate 6.4 s · similarity 0.6 s; 19,198 references resolved; blueprint 3.2 s |
+| clap-rs/clap (tree-sitter) | 419 | 6.3 s | 641 types, 1,373 methods, 93 trait impls; `Command::new` has 1,006 resolved callers |
+| clap-rs/clap (lexical fallback) | 419 | ~17 s | Rust symbols, `use crate::` paths and `Type::method` calls still resolved |
+
+The two main fixes were full-text index maintenance (deletes had scanned an unindexed column) and the
+documentation-mention resolver (a linear scan per mention).
+
 ## 2. Agent A/B harness (`promapkin bench agents --spec spec.json`)
 
 For each task, the harness makes two fresh copies of the repository (`.promapkin/` excluded):

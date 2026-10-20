@@ -413,18 +413,22 @@ def describe_class(ctx: Ctx, n: dict[str, Any]) -> str:
 def patterns(ctx: Ctx) -> dict[str, Any]:
     s = ctx.store
     clf = ctx.rt.classifier
-    s.delete_nodes("kind='pattern' AND evidence IN (?, ?)", (ev.HEURISTIC, ev.ML_CLASSIFIER))
+    s.delete_nodes("kind='pattern' AND evidence IN (?, ?, ?)", (ev.HEURISTIC, ev.ML_CLASSIFIER, ev.LLM_INFERENCE))
     found = []
+    candidates = []
     for n in s.nodes("class"):
-        if n["attrs"].get("test") or ctx.store.node(module_of(s, n["id"]) or "") and \
-                (s.node(module_of(s, n["id"]) or "") or {}).get("attrs", {}).get("test"):
+        mod = s.node(module_of(s, n["id"]) or "") or {}
+        if n["attrs"].get("test") or mod.get("attrs", {}).get("test"):
             continue
-        desc = describe_class(ctx, n)
-        c = clf.classify("design_pattern", desc)
+        candidates.append(n)
+    llm = getattr(ctx.ws, "llm", None)
+    descs = [describe_class(ctx, n) for n in candidates]
+    for n, desc, c in zip(candidates, descs, clf.classify_many("design_pattern", descs, llm)):
         if c.label in ("none", "unknown") or c.confidence < 0.45:
             continue
         roles = _pattern_roles(ctx, c.label, n)
-        evidence = ev.HEURISTIC if c.tier == "heuristic" or c.tier.startswith("heuristic>") else ev.ML_CLASSIFIER
+        evidence = (ev.LLM_INFERENCE if c.tier == "llm" else
+                    ev.HEURISTIC if c.tier == "heuristic" or c.tier.startswith("heuristic>") else ev.ML_CLASSIFIER)
         pid = f"pattern:{c.label}:{n['qualname']}"
         s.upsert_node(pid, "pattern", f"{c.label.replace('_', ' ').title()} — {n['name']}", evidence=evidence,
                       confidence=c.confidence, revision=ctx.revision, file=n["file"], line_start=n["line_start"],
@@ -453,7 +457,7 @@ def patterns(ctx: Ctx) -> dict[str, Any]:
                 ev.AST, [loc(f)], 0.7, instantiates=[i.split(":")[-1] for i in sorted(inst)]))
     found.sort(key=lambda p: -p["confidence"])
     return {"title": "Design patterns", "patterns": found, "composition_roots": composition_roots,
-            "classifier": {"mode": clf.mode, "model": clf.model_name},
+            "classifier": {"mode": "llm" if llm else clf.mode, "model": llm.label if llm else clf.model_name},
             "note": "Patterns are recognised from structure. Why an author chose them is unknown unless a document "
                     "says so (see Decisions)."}
 

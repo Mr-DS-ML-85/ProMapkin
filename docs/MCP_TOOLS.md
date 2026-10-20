@@ -24,7 +24,11 @@ R = read-only, W = writes shared knowledge or artifacts (validated, append-only,
 | `get_node` | R | **node**, limit | One graph node with provenance and its incoming/outgoing relationships, each with evidence class and trust. |
 | `get_neighbors` | R | **node**, direction, types, depth, min_trust, limit | Neighbourhood of a node, filtered by relationship types and minimum evidence trust. |
 | `query_graph` | R | kinds, name_pattern, edge_types, evidence, min_trust, status, file_prefix, limit | Structured query: nodes by kind / name pattern (* wildcard) / evidence / status / file prefix, optionally with edges of given types above a trust threshold. |
-| `trace_path` | R | **source**, **target**, max_depth, k, types | Most-trusted execution/dependency paths between two nodes (evidence-weighted), with the evidence of every step. |
+| `trace_path` | R | **source**, **target**, max_depth, k, types, mode | Most-trusted paths between two nodes with the evidence of every step and a one-line summary. mode auto tries flow edges, then structural edges, then undirected relations. |
+| `get_hubs` | R | limit | Most-connected code symbols ('god nodes') by distinct neighbours over code edges. |
+| `get_communities` | R | — | Communities of modules (ML: imports + embedding similarity; heuristic: directories). |
+| `get_surprising_connections` | R | limit | Rare observed edges between otherwise separate communities (name matches and inferred links excluded, so no false cross-script links). |
+| `export_graph_html` | W | path, max_nodes | Write a self-contained interactive HTML graph explorer (works offline). |
 | `trace_dataflow` | R | **source**, max_depth, limit | Data paths from an entry point/endpoint/function to sinks (database, HTTP, files, queues, config) labelled static vs inferred. |
 | `trace_dependencies` | R | module, depth | Module dependency paths, dependents, external packages and import cycles (whole repo if module omitted). |
 | `analyze_impact` | R | **target**, depth, min_trust, limit | Modules, symbols, endpoints, docs, knowledge and tests potentially affected by changing a node, ranked by evidence-weighted path trust. |
@@ -51,6 +55,8 @@ R = read-only, W = writes shared knowledge or artifacts (validated, append-only,
 | `get_ml_status` | R | — | Embedding/classifier tier in use, model availability and the classification tasks. |
 | `classify` | R | **task**, **text** | Run the two-tier classifier (rules + ML/DL) on text for a task: layer, resource, design_pattern, doc_intent, note_intent. |
 | `submit_classification_feedback` | W | **task**, **text**, **label** | Teach the classifiers a labelled example (stored in the repo's .promapkin/training). |
+| `ingest_runtime_trace` | W | **directory** | Ingest a runtime trace directory produced by `promapkin trace run` (inside the repository) as runtime evidence: real call edges, test→code links, dynamic links static analysis missed. Promapkin never executes code from MCP. |
+| `get_toolchain_status` | R | — | Which parsers are active per language (TypeScript compiler, tree-sitter, lexical) and how to install the real ones. |
 | `run_benchmark` | R | spec, budget, limit | Retrieval benchmark: recall@k, MRR, context hit rate and token reduction vs naive exploration, with an ML-vs-heuristic ablation. Optional spec {tasks:[{query, expected:[files/symbols]}]}. |
 
 Required arguments are **bold**.
