@@ -42,8 +42,12 @@ Persistence/artifacts   .promapkin/index.db (SQLite WAL) · blueprints/ · hando
 5. Graph ML: embeddings for changed nodes, propagation, `similar_to` edges and disambiguation.
 6. Freshness: agent, handoff and runtime facts that cite changed files become `stale`.
 
-All of this runs in **one transaction**. A failure rolls back and is recorded as a failed job, so
-the last valid index survives.
+Steps 1–2 (including any LLM extraction) run **before** the write lock is taken. Steps 3–6 run in **one
+transaction**: a failure rolls back and is recorded as a failed job, so the last valid index survives. In `--llm`
+mode, step 4's model calls run after that commit with no lock held, and a second short transaction applies the
+cached answers. No network call ever happens while the index is locked, so other processes (the MCP server, a
+second terminal) wait seconds at most. A writer that cannot get the lock within `db_busy_timeout` gets a clear
+"index busy" error.
 
 ## Evidence-aware traversal (graph.py)
 

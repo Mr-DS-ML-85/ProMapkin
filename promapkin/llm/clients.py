@@ -12,10 +12,11 @@ Provider-specific message formats never leave this module.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from promapkin.llm.errors import LLMError, LLMRefusal, LLMTruncated, LLMUnavailable
+from promapkin.llm.errors import LLMError, LLMInvalidOutput, LLMRefusal, LLMTruncated, LLMUnavailable
 
 DEFAULT_MODELS = {"anthropic": "claude-opus-5-5", "openai": "gpt-5"}
 
@@ -71,6 +72,82 @@ def strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
 
     fix(s)
     return s
+
+
+STRUCTURED_MODES = ("json_schema", "json_object", "prompt")
+_FENCE = re.compile(r"\A```(?:json)?[ \t]*\n(.*)\n```\Z", re.S)
+
+
+def schema_instructions(schema: dict[str, Any]) -> str:
+    """For endpoints that do not enforce response_format: the schema goes into the system prompt."""
+    return ("Reply with a single JSON object and nothing else: no prose, no markdown. It must match this JSON "
+            "schema exactly (every property present, no extra properties):\n" +
+            json.dumps(strict_schema(schema), separators=(",", ":")))
+
+
+def parse_structured(content: str | None, schema: dict[str, Any], *, finish_reason: str = "",
+                     allow_fence: bool = False) -> dict[str, Any]:
+    """Parse and validate a structured reply. Never repairs JSON: a reply is either exactly a JSON object
+    matching the schema (optionally inside one ```json block when allow_fence) or an LLMInvalidOutput that
+    says what went wrong."""
+    raw = content or ""
+    body = raw.strip()
+    where = f"finish_reason={finish_reason or 'unknown'}, {len(raw)} chars"
+    if not body:
+        raise LLMInvalidOutput("empty", f"model returned empty content ({where})", raw, finish_reason)
+    if allow_fence:
+        m = _FENCE.match(body)
+        if m:
+            body = m.group(1).strip()
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError as exc:
+        leading = not body.startswith(("{", "[")) and "{" in body
+        if leading or exc.msg.startswith("Extra data"):
+            raise LLMInvalidOutput(
+                "wrapped", f"model wrapped the JSON in other text ({where}; reply starts {body[:12]!r}); the "
+                "endpoint is probably ignoring response_format - try openai_structured_output: \"prompt\"",
+                raw, finish_reason) from exc
+        if exc.pos >= len(body) - 1 or "Unterminated" in exc.msg:
+            raise LLMInvalidOutput("truncated", f"JSON ends before it is complete ({where}); the endpoint may "
+                                   "cut long replies without reporting it", raw, finish_reason) from exc
+        raise LLMInvalidOutput("malformed", f"invalid JSON at line {exc.lineno} col {exc.colno}: {exc.msg} "
+                               f"({where})", raw, finish_reason) from exc
+    if not isinstance(data, dict):
+        raise LLMInvalidOutput("not_object", f"expected a JSON object, got {type(data).__name__} ({where})",
+                               raw, finish_reason)
+    problems = schema_errors(data, schema)
+    if problems:
+        raise LLMInvalidOutput("schema", f"reply does not match the schema: {'; '.join(problems[:3])} ({where})",
+                               raw, finish_reason)
+    return data
+
+
+_TYPES = {"object": dict, "array": list, "string": str, "boolean": bool, "integer": int, "number": (int, float)}
+
+
+def schema_errors(value: Any, schema: dict[str, Any], path: str = "$") -> list[str]:
+    """The subset of JSON Schema Promapkin uses: type, properties (all required), items, enum."""
+    kind = schema.get("type") or ("object" if "properties" in schema else None)
+    if kind:
+        ok = isinstance(value, _TYPES[kind]) and not (kind in ("integer", "number") and isinstance(value, bool))
+        if not ok:
+            return [f"{path} should be {kind}, got {type(value).__name__}"]
+    if "enum" in schema and value not in schema["enum"]:
+        return [f"{path} = {str(value)[:40]!r} is not one of {schema['enum']}"]
+    out: list[str] = []
+    if isinstance(value, dict):
+        props = schema.get("properties", {})
+        out += [f"{path}.{k} is missing" for k in props if k not in value]
+        for k, sub in props.items():
+            if k in value:
+                out += schema_errors(value[k], sub, f"{path}.{k}")
+    elif isinstance(value, list) and "items" in schema:
+        for i, v in enumerate(value):
+            out += schema_errors(v, schema["items"], f"{path}[{i}]")
+            if len(out) >= 5:
+                break
+    return out
 
 
 class LLMClient:
@@ -171,10 +248,7 @@ class AnthropicClient(LLMClient):
                                            "format": {"type": "json_schema", "schema": strict_schema(schema)}})
         if resp.stop_reason == "max_tokens":
             raise LLMTruncated("structured output was cut off by max_tokens")
-        try:
-            return json.loads(self._text_of(resp))
-        except json.JSONDecodeError as exc:
-            raise LLMError("model returned invalid JSON") from exc
+        return parse_structured(self._text_of(resp), schema, finish_reason=resp.stop_reason or "")
 
     def text(self, system: str, user: str, *, max_tokens: int = 16000, effort: str = "medium") -> str:
         resp = self._create(max_tokens=max_tokens, system=system, messages=[{"role": "user", "content": user}],
@@ -217,8 +291,14 @@ class OpenAIClient(LLMClient):
     provider = "openai"
 
     def __init__(self, model: str, usage: Usage, api_key: str | None = None, base_url: str | None = None,
-                 timeout: float = 300.0, max_retries: int = 3, reasoning_effort: str | None = None):
+                 timeout: float = 300.0, max_retries: int = 3, reasoning_effort: str | None = None,
+                 structured_output: str = "json_schema"):
         super().__init__(model or DEFAULT_MODELS["openai"], usage)
+        if structured_output not in STRUCTURED_MODES:
+            raise LLMUnavailable(f"openai_structured_output must be one of {STRUCTURED_MODES}")
+        # json_schema: strict server-side schema; json_object: JSON mode + schema in the prompt; prompt: schema
+        # in the prompt only, for endpoints that ignore response_format (web-session proxies).
+        self.structured_output = structured_output
         try:
             import openai
         except ModuleNotFoundError as exc:
@@ -261,16 +341,21 @@ class OpenAIClient(LLMClient):
 
     def json(self, system: str, user: str, schema: dict[str, Any], *, max_tokens: int = 16000,
              effort: str = "medium", name: str = "result") -> dict[str, Any]:
+        mode = self.structured_output
+        extra: dict[str, Any] = {}
+        if mode == "json_schema":
+            extra["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": name, "strict": True, "schema": strict_schema(schema)}}
+        else:
+            system = f"{system}\n\n{schema_instructions(schema)}"
+            if mode == "json_object":
+                extra["response_format"] = {"type": "json_object"}
         choice = self._create(max_tokens=max_tokens, messages=[{"role": "system", "content": system},
-                                                               {"role": "user", "content": user}],
-                              response_format={"type": "json_schema", "json_schema": {
-                                  "name": name, "strict": True, "schema": strict_schema(schema)}})
+                                                               {"role": "user", "content": user}], **extra)
         if choice.finish_reason == "length":
             raise LLMTruncated("structured output was cut off by the token limit")
-        try:
-            return json.loads(choice.message.content or "")
-        except json.JSONDecodeError as exc:
-            raise LLMError("model returned invalid JSON") from exc
+        return parse_structured(choice.message.content, schema, finish_reason=choice.finish_reason or "",
+                                allow_fence=mode == "prompt")
 
     def text(self, system: str, user: str, *, max_tokens: int = 16000, effort: str = "medium") -> str:
         choice = self._create(max_tokens=max_tokens, messages=[{"role": "system", "content": system},

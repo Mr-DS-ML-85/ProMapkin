@@ -97,29 +97,35 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
         timer.mark("discover")
         incremental = not full and bool(store.get_meta("indexed_revision"))
         touched = set(changed) | set(deleted)
+        llm = getattr(ws, "llm", None)
+        # Parse before taking the write lock: parsers and LLM extraction are the slow part of a scan, and
+        # other promapkin processes (MCP server, a second terminal) must not wait on them.
+        parsed = _batch_parse(ws, [p for p in changed if contents[p][1] in ("javascript", "typescript")], errors)
+        extracted: dict[str, tuple[str, bool, Facts | None, str | None]] = {}
+        for p in changed:
+            text = (ws.root / p).read_text(encoding="utf-8", errors="replace")
+            facts = parsed.get(p)
+            parser = "typescript-compiler" if facts else None
+            if facts is None:
+                facts, parser = _extract_one(ws, p, contents[p][1], text, errors)
+            extracted[p] = (text, is_generated(p, text), facts, parser)
+        timer.mark("parse")
         with store.transaction():
             # Capture what other files may depend on before the old facts disappear.
             old_names = _defined_names(store, touched) if incremental else set()
             inbound = _inbound_files(store, touched) if incremental else set()
             for p in deleted:
                 store.forget_file(p)
-            parsed = _batch_parse(ws, [p for p in changed if contents[p][1] in ("javascript", "typescript")],
-                                  errors)
             parsers: dict[str, int] = {}
             for p in changed:
                 store.forget_file(p)
                 sha, lang, size = contents[p]
-                text = (ws.root / p).read_text(encoding="utf-8", errors="replace")
-                generated = is_generated(p, text)
+                text, generated, facts, parser = extracted[p]
                 store.upsert_file(p, sha, lang, size, revision)
                 store.upsert_node(f"file:{p}", "file", PurePosixPath(p).name, evidence=ev.AST, file=p,
                                   owner_file=p, revision=revision,
                                   attrs={"language": lang, "size": size, "sha": sha, "test": is_test_path(p),
                                          "generated": generated})
-                facts = parsed.get(p)
-                parser = "typescript-compiler" if facts else None
-                if facts is None:
-                    facts, parser = _extract_one(ws, p, lang, text, errors)
                 if facts is None:
                     continue
                 parsers[parser or lang] = parsers.get(parser or lang, 0) + 1
@@ -140,9 +146,8 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
             stats = resolve(store, revision, ambiguous, files=scope)
             timer.mark("resolve")
             warnings: list[str] = []
-            if changed or deleted or full:
-                stats["classified"] = _optional("classification", warnings, classify_pass, store, rt, revision,
-                                                getattr(ws, "llm", None)) or {}
+            if (changed or deleted or full) and llm is None:
+                stats["classified"] = _optional("classification", warnings, classify_pass, store, rt, revision) or {}
             timer.mark("classify")
             stats["stale_inferences"] = _mark_stale(store, set(changed) | set(deleted)) if not full else 0
             _gc_shared(store)
@@ -158,7 +163,17 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
             store.set_meta("indexed_at", str(time.time()))
             store.set_meta("ml", json.dumps(rt.describe()))
             timer.mark("finalize")
-            stats["timings"] = timer.timings
+        if (changed or deleted or full) and llm is not None:
+            # --llm: ask the model with no lock held (answers land in the response cache), then apply them in
+            # a short transaction that never goes to the network. The structural index above is already
+            # committed; classification is an enrichment pass, as without --llm.
+            _optional_unlocked("LLM classification", warnings, classify_pass, store, rt, revision, llm, True)
+            with store.transaction(), llm.cache_only():
+                stats["classified"] = _optional("classification", warnings, classify_pass, store, rt, revision,
+                                                llm) or {}
+                _gc_shared(store)
+            timer.mark("classify (llm)")
+        stats["timings"] = timer.timings
         result = ScanResult(
             revision=revision, files=len(contents), changed=len(changed), deleted=len(deleted),
             changed_files=sorted(changed)[:500], deleted_files=sorted(deleted)[:500],
@@ -189,6 +204,15 @@ def _optional(name: str, warnings: list[str], fn: Callable[..., Any], *args: Any
         return None
     store.conn.execute(f"RELEASE {sp}")
     return result
+
+
+def _optional_unlocked(name: str, warnings: list[str], fn: Callable[..., Any], *args: Any) -> Any:
+    """Like _optional, for passes that only read the index (no savepoint needed)."""
+    try:
+        return fn(*args)
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"{name} pass skipped: {type(exc).__name__}: {str(exc)[:300]}")
+        return None
 
 
 def _batch_parse(ws: Workspace, js_files: list[str], errors: list[str]) -> dict[str, Facts]:
@@ -826,9 +850,10 @@ def _normpath(p: str) -> str:
 
 # ------------------------------------------------------------------------------------- ML passes
 
-def classify_pass(store: Store, rt: Any, revision: str, llm: Any = None) -> dict[str, Any]:
+def classify_pass(store: Store, rt: Any, revision: str, llm: Any = None, warm_only: bool = False) -> dict[str, Any]:
     """Classify modules (layer), unclassified library calls, doc sections and notes: two-tier classifier,
-    or the LLM in --llm mode. Batched so each task is one pass over its items."""
+    or the LLM in --llm mode. Batched so each task is one pass over its items. With warm_only, only the
+    classifier runs (filling its caches) and nothing is written: --llm scans do this outside the write lock."""
     clf = rt.classifier
     counts: dict[str, Any] = {"layer": 0, "resource": 0, "doc_intent": 0, "note_intent": 0,
                               "classifier": f"llm:{llm.label}" if llm else clf.mode}
@@ -838,17 +863,26 @@ def classify_pass(store: Store, rt: Any, revision: str, llm: Any = None) -> dict
         if len(lst) < 15:
             lst.append(dst.rsplit(":", 1)[-1])
     modules = store.nodes("module")
-    texts = [f"{m['name']} {(m['text'] or '')[:300]} {' '.join(defines.get(m['id'], []))}" for m in modules]
-    for m, c in zip(modules, clf.classify_many("layer", texts, llm)):
+    calls = [r for r in store.refs() if r["type"] == "external_call"]
+    uniq = sorted({(r["context"].get("library", ""), r["target"].split(".", 1)[-1]) for r in calls})
+    sections = store.nodes("doc_section")
+    notes = store.nodes("code_note")
+    module_labels = clf.classify_many("layer", [f"{m['name']} {(m['text'] or '')[:300]} "
+                                                f"{' '.join(defines.get(m['id'], []))}" for m in modules], llm)
+    labels = dict(zip(uniq, clf.classify_many("resource", [f"{lib} {call}" for lib, call in uniq], llm)))
+    section_labels = clf.classify_many("doc_intent", [f"{s['name']}\n{(s['text'] or '')[:400]}" for s in sections],
+                                       llm)
+    note_labels = clf.classify_many("note_intent", [n["text"] or n["name"] for n in notes], llm)
+    if warm_only:
+        return counts
+
+    for m, c in zip(modules, module_labels):
         attrs = dict(m["attrs"])
         attrs["layer"] = c.as_dict()
         _update_attrs(store, m["id"], attrs)
         counts["layer"] += 1
 
     store.delete_edges("json_extract(attrs, '$.classifier_task')='resource'")
-    calls = [r for r in store.refs() if r["type"] == "external_call"]
-    uniq = sorted({(r["context"].get("library", ""), r["target"].split(".", 1)[-1]) for r in calls})
-    labels = dict(zip(uniq, clf.classify_many("resource", [f"{lib} {call}" for lib, call in uniq], llm)))
     seen: set[tuple[str, str]] = set()
     evidence = ev.LLM_INFERENCE if llm else ev.ML_CLASSIFIER
     for ref in calls:
@@ -872,15 +906,12 @@ def classify_pass(store: Store, rt: Any, revision: str, llm: Any = None) -> dict
                               "classification": c.as_dict()})
         counts["resource"] += 1
 
-    sections = store.nodes("doc_section")
-    for s_, c in zip(sections, clf.classify_many("doc_intent", [f"{s['name']}\n{(s['text'] or '')[:400]}"
-                                                                for s in sections], llm)):
+    for s_, c in zip(sections, section_labels):
         attrs = dict(s_["attrs"])
         attrs["intent"] = c.as_dict()
         _update_attrs(store, s_["id"], attrs)
         counts["doc_intent"] += 1
-    notes = store.nodes("code_note")
-    for n, c in zip(notes, clf.classify_many("note_intent", [n["text"] or n["name"] for n in notes], llm)):
+    for n, c in zip(notes, note_labels):
         attrs = dict(n["attrs"])
         attrs["category"] = c.label
         attrs["classification"] = c.as_dict()

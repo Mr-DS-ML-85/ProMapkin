@@ -27,7 +27,10 @@ def ask(ws: Any, engine: LLMEngine, question: str, *, allow_writes: bool = False
     svc = Service(ws, agent=f"cli-ask:{engine.label}")
     tools = [t for t in TOOLS if t.read_only or allow_writes]
     by_name = {t.name: t for t in tools}
-    chat = engine.client.chat(ASK_SYSTEM, [{"name": t.name, "description": t.description, "input_schema": t.schema}
+    # The question is repeated in the system prompt: some OpenAI-compatible proxies replay only the last N
+    # messages of a long tool loop, and the system prompt is the part they always keep.
+    system = f"{ASK_SYSTEM}\n\nThe question you are answering:\n{question}"
+    chat = engine.client.chat(system, [{"name": t.name, "description": t.description, "input_schema": t.schema}
                                            for t in tools])
     chat.user(question)
     trace = []

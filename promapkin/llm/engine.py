@@ -21,17 +21,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from promapkin import evidence as ev
 from promapkin.extract import Facts, is_test_path
-from promapkin.llm.clients import LLMClient, Usage
-from promapkin.llm.errors import LLMBudgetExceeded, LLMError
+from promapkin.llm.clients import LLMClient, Usage, schema_errors
+from promapkin.llm.errors import LLMBudgetExceeded, LLMError, LLMInvalidOutput, LLMUnavailable
 from promapkin.security import UNTRUSTED_NOTICE
 
 SYSTEM_BASE = (
@@ -82,6 +84,7 @@ class LLMEngine:
         self.stats = EngineStats()
         self._lock = threading.Lock()
         self._calls = 0
+        self._cache_only = False
 
     # ------------------------------------------------------------------ plumbing
     @property
@@ -109,7 +112,19 @@ class LLMEngine:
             "INSERT OR REPLACE INTO llm_cache(key, provider, model, task, response, created_at) VALUES (?,?,?,?,?,?)",
             (key, self.client.provider, self.client.model, task, json.dumps(value), time.time()))
 
+    @contextmanager
+    def cache_only(self) -> Iterator[None]:
+        """Answer only from the response cache: used while a write transaction is open, so no network call
+        ever holds the database lock. A miss raises LLMUnavailable, and callers fall back as usual."""
+        self._cache_only = True
+        try:
+            yield
+        finally:
+            self._cache_only = False
+
     def _reserve(self) -> None:
+        if self._cache_only:
+            raise LLMUnavailable("not in the response cache (no network calls while the index is being written)")
         with self._lock:
             if self._calls >= self.max_calls:
                 raise LLMBudgetExceeded(f"LLM call budget of {self.max_calls} reached for this command "
@@ -122,6 +137,23 @@ class LLMEngine:
             with path.open("a") as fh:
                 fh.write(json.dumps({"time": time.time(), "provider": self.client.provider, "model": self.client.model,
                                      "task": task, "subject": subject[:200], "chars": chars}) + "\n")
+
+    def _debug(self, task: str, subject: str, exc: Exception) -> Exception:
+        """With PROMAPKIN_LLM_DEBUG=1, keep an invalid structured reply (secrets redacted) under
+        .promapkin/llm-debug/ for diagnosis. Local only; never sent anywhere."""
+        if not isinstance(exc, LLMInvalidOutput) or os.environ.get("PROMAPKIN_LLM_DEBUG", "") in ("", "0"):
+            return exc
+        d = self.ws.dir / "llm-debug"
+        d.mkdir(exist_ok=True)
+        path = d / f"{time.strftime('%Y%m%d-%H%M%S')}-{re.sub(r'[^a-z0-9]+', '-', task.lower())}-{id(exc):x}.json"
+        path.write_text(json.dumps({"task": task, "subject": subject[:300], "provider": self.client.provider,
+                                    "model": self.client.model, "kind": exc.kind, "finish_reason": exc.finish_reason,
+                                    "error": str(exc), "raw_reply": redact(exc.raw)[0]}, indent=2))
+        exc.args = (f"{exc.args[0]} [raw reply: {path.relative_to(self.ws.root)}]",)
+        return exc
+
+    def _valid_hit(self, hit: Any, schema: dict[str, Any]) -> bool:
+        return isinstance(hit, dict) and not schema_errors(hit, schema)
 
     def _prepare(self, text: str) -> str:
         clean, n = redact(text)
@@ -138,14 +170,17 @@ class LLMEngine:
         key = self._key(task, system, user, json.dumps(schema, sort_keys=True))
         if use_cache:
             hit = self._cache_get(key)
-            if hit is not None:
+            if hit is not None and self._valid_hit(hit, schema):
                 self.stats.cached += 1
                 self.usage.cached_calls += 1
                 return hit
         self._reserve()
         self._log(task, len(user), subject)
-        out = self.client.json(SYSTEM_BASE + "\n\n" + system, user, schema, max_tokens=max_tokens, effort=effort,
-                               name=task)
+        try:
+            out = self.client.json(SYSTEM_BASE + "\n\n" + system, user, schema, max_tokens=max_tokens,
+                                   effort=effort, name=task)
+        except LLMInvalidOutput as exc:
+            raise self._debug(task, subject, exc) from exc.__cause__
         if use_cache:
             self._cache_put(key, task, out)
         return out
@@ -174,7 +209,7 @@ class LLMEngine:
             clean = self._prepare(user)
             key = self._key(task, system, clean, json.dumps(schema, sort_keys=True))
             hit = self._cache_get(key)
-            if hit is not None:
+            if hit is not None and self._valid_hit(hit, schema):
                 self.stats.cached += 1
                 self.usage.cached_calls += 1
                 results[i] = hit
@@ -193,8 +228,8 @@ class LLMEngine:
 
         if pending:
             with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
-                for i, key, out in pool.map(run, pending):
-                    results[i] = out
+                for (i, key, out), job in zip(pool.map(run, pending), pending):
+                    results[i] = self._debug(task, job[4], out) if isinstance(out, Exception) else out
                     if not isinstance(out, Exception):
                         self._cache_put(key, task, out)
         return results
@@ -222,7 +257,8 @@ class LLMEngine:
         for start, res in zip(spans, self.map_json(f"classify:{task_name}", jobs, schema, effort="low",
                                                   max_tokens=8000)):
             if isinstance(res, Exception):
-                self.stats.fallbacks += 1
+                if not self._cache_only:   # a cache-only miss already counted when the live call failed
+                    self.stats.fallbacks += 1
                 continue
             for item in res.get("items", []):
                 idx = item.get("index")
@@ -395,6 +431,17 @@ class LLMEngine:
                   "written); (2) architecture decisions with their rationale and status; (3) requirements and "
                   "constraints the code must respect; (4) names of code elements mentioned. Every claim, decision "
                   "and requirement must include a short verbatim quote from the document.")
+        snapshot = (list(facts.nodes), list(facts.edges), list(facts.refs))
+        try:
+            self._enrich(path, text, facts, system)
+        except Exception:
+            # All or nothing: a failed analysis leaves the deterministic Markdown facts exactly as extracted.
+            facts.nodes, facts.edges, facts.refs = snapshot
+            with self._lock:
+                self.stats.fallbacks += 1
+            raise
+
+    def _enrich(self, path: str, text: str, facts: Facts, system: str) -> None:
         data = self.call_json("enrich_document", system, f"Document: {path}\n\n{text[:60000]}", self.DOC_SCHEMA,
                               subject=path, effort="low")
         norm = " ".join(text.split())

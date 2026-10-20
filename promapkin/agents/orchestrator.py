@@ -8,6 +8,7 @@ merged as agent inference. A targeted change only re-runs the affected specialis
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from typing import Any, Callable
 
 from promapkin.agents import specialists as sp
@@ -73,8 +74,13 @@ def run(ws: Workspace, sections: list[str] | None = None, goal: str | None = Non
     agent_log: list[dict[str, Any]] = []
     for name in order:
         say(f"specialist: {name}")
-        with ws.store.transaction():
+        llm = getattr(ws, "llm", None)
+        if name in ("patterns", "decisions") and "patterns" not in ctx.cache:
+            sp.warm_patterns(ctx)   # LLM calls happen here, before the write lock is taken
+        with ws.store.transaction(), (llm.cache_only() if llm is not None else nullcontext()):
             section = _run_specialist(ctx, name, goal)
+        if name == "roadmap":
+            _refine_roadmap(ctx, section, goal)
         ctx.cache[name] = section
         out[name] = section
         if provider.name == "none":
@@ -128,21 +134,25 @@ def _run_specialist(ctx: sp.Ctx, name: str, goal: str | None) -> dict[str, Any]:
     if name == "verification":
         return sp.verification(ctx)
     if name == "roadmap":
-        plan = sp.roadmap(ctx, goal)
-        llm = getattr(ctx.ws, "llm", None)
-        if llm is not None and plan.get("steps") and goal:
-            from promapkin.llm.errors import LLMError
-            try:
-                refined = llm.refine_roadmap(plan, {"constraints": plan.get("constraints", [])})
-                valid = {s for st in plan["steps"] for s in st.get("components", [])}
-                for st in refined.get("steps", []):   # components must exist in the deterministic plan or graph
-                    st["components"] = [c for c in st.get("components", []) if c in valid or ctx.store.node(c)]
-                plan["llm_plan"] = {**refined, "model": llm.label,
-                                    "note": "LLM refinement of the deterministic plan above (inferred)"}
-            except LLMError as exc:
-                plan["llm_error"] = str(exc)
-        return plan
+        return sp.roadmap(ctx, goal)
     raise ValueError(f"unknown section {name}")
+
+
+def _refine_roadmap(ctx: sp.Ctx, plan: dict[str, Any], goal: str | None) -> None:
+    """--llm: refine the committed deterministic plan. Runs outside the write transaction (reads only)."""
+    llm = getattr(ctx.ws, "llm", None)
+    if llm is None or not plan.get("steps") or not goal:
+        return
+    from promapkin.llm.errors import LLMError
+    try:
+        refined = llm.refine_roadmap(plan, {"constraints": plan.get("constraints", [])})
+        valid = {s for st in plan["steps"] for s in st.get("components", [])}
+        for st in refined.get("steps", []):   # components must exist in the deterministic plan or graph
+            st["components"] = [c for c in st.get("components", []) if c in valid or ctx.store.node(c)]
+        plan["llm_plan"] = {**refined, "model": llm.label,
+                            "note": "LLM refinement of the deterministic plan above (inferred)"}
+    except LLMError as exc:
+        plan["llm_error"] = str(exc)
 
 
 def _scope(section: dict[str, Any]) -> list[str]:

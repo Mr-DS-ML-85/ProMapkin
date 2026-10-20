@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from promapkin.handoff import HandoffError, VersionConflict
 from promapkin.knowledge import KnowledgeError
 from promapkin.security import PathOutsideRepository
 from promapkin.service import Service, ServiceError
+from promapkin.store import BUSY_HINT, StoreBusy, is_locked_error
 
 SECTION_CMDS = {"architecture": "architecture", "dataflow": "dataflow", "api": "api", "decisions": "decisions",
                 "patterns": "patterns", "risks": "risks", "verification": "verification",
@@ -481,6 +483,15 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except VersionConflict as exc:
         print(f"conflict: {exc}", file=sys.stderr)
+        return 3
+    except StoreBusy as exc:
+        print(f"error: index busy: {exc}", file=sys.stderr)
+        return 3
+    except sqlite3.OperationalError as exc:
+        if not is_locked_error(exc):
+            raise
+        print(f"error: index busy: {BUSY_HINT.format(path=ws.db_path, timeout=ws.config.db_busy_timeout)}",
+              file=sys.stderr)
         return 3
     except (ServiceError, KnowledgeError, HandoffError, PathOutsideRepository, LookupError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)

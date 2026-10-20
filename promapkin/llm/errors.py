@@ -19,3 +19,14 @@ class LLMTruncated(LLMError):
 
 class LLMBudgetExceeded(LLMError):
     pass
+
+
+class LLMInvalidOutput(LLMError):
+    """A structured call returned something that is not the requested JSON. `kind` names the failure
+    (empty, truncated, wrapped, malformed, not_object, schema); `raw` keeps the reply for the local debug log."""
+
+    def __init__(self, kind: str, message: str, raw: str = "", finish_reason: str = ""):
+        super().__init__(message)
+        self.kind = kind
+        self.raw = raw
+        self.finish_reason = finish_reason

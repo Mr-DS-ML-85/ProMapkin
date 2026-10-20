@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- `--llm` with OpenAI-compatible proxies that ignore `response_format` (for example OmniRoute's DeepSeek Web
+  provider, `ds-web/...`): document analysis failed with a bare "model returned invalid JSON". Structured replies now
+  report what went wrong (empty, truncated, wrapped in other text, malformed, not an object, schema mismatch) with the
+  finish reason and length, and are validated against the requested schema instead of being accepted on shape alone.
+  New `openai_structured_output` setting (`json_schema` | `json_object` | `prompt`; env `PROMAPKIN_LLM_STRUCTURED`)
+  for endpoints that do not enforce schemas. `PROMAPKIN_LLM_DEBUG=1` keeps invalid replies (secrets redacted) in
+  `.promapkin/llm-debug/`.
+- A failed LLM document analysis could leave a document's facts half-replaced; it is now all-or-nothing and the
+  deterministic Markdown facts are kept. These failures now count as fallbacks in the usage line. Cached responses
+  that no longer match their schema are ignored.
+- `database is locked` when two promapkin processes wrote at once (for example a `--llm` scan or the MCP server and
+  `blueprint generate`): scans parsed files and called the LLM while holding the index's write lock, for minutes.
+  Parsing and every LLM call now happen with no lock held, so write transactions are short. If the lock still cannot
+  be acquired within `db_busy_timeout` (default 30 s), commands exit with code 3 and an "index busy" message
+  instead of a traceback.
+- `ask`: the question is repeated in the system prompt, so proxies that replay only the last messages of a long
+  tool loop no longer lose it.
+- `graph similar "<free text>"` treated the text as a node name (exit 2, or neighbours of an arbitrary node).
+
 ## 0.2.0
 
 ### Fixed

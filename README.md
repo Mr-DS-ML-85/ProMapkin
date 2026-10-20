@@ -157,7 +157,9 @@ With `--llm`:
 
 Safeguards:
 - Official `anthropic` and `openai` SDKs. OpenAI-compatible base URLs (vLLM, Ollama, LM Studio, gateways) work too.
-- Strict JSON schemas for every structured call.
+- Strict JSON schemas, validated on every reply. For proxies that ignore them (for example OmniRoute's `ds-web`),
+  set `openai_structured_output: "prompt"`. See [docs/LLM.md](docs/LLM.md).
+- No LLM call ever runs while the index is locked, so the MCP server and the CLI can work side by side.
 - A response cache, so unchanged inputs are never re-sent.
 - A per-command call budget.
 - Secret redaction and an egress log.

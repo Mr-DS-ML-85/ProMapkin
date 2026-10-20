@@ -47,6 +47,29 @@ For OpenAI-compatible local servers no key is required.
 "anthropic"` or `"openai"`, `"allow_remote": true`, and optionally `openai_base_url` / `provider_model` in
 `.promapkin/config.json`.
 
+### Endpoints that ignore `response_format`
+
+Some OpenAI-compatible proxies accept `response_format` but never enforce it. OmniRoute's **DeepSeek Web** provider
+(`ds-web/...`) is one: it drives chat.deepseek.com and sends the model a single prompt, so strict JSON schemas are
+silently dropped. Tool calls are emulated, so `ask` mostly works, but long structured replies (document analysis)
+come back wrapped in markdown or prose. Promapkin then reports, for example: `model wrapped the JSON in other text
+(finish_reason=stop, 5123 chars; reply starts '```json\n{\n')`.
+
+Set `openai_structured_output` in `.promapkin/config.json`, or use `PROMAPKIN_LLM_STRUCTURED` for one run:
+
+| Value | Request | Accepted reply |
+|---|---|---|
+| `json_schema` (default) | strict `response_format: json_schema` | exactly a JSON object |
+| `json_object` | JSON mode, schema in the system prompt | exactly a JSON object |
+| `prompt` | schema in the system prompt only | a JSON object, bare or as one ```` ```json ```` block |
+
+Every mode validates the reply against the schema; nothing is repaired or guessed. To see what an endpoint
+actually returned, run with `PROMAPKIN_LLM_DEBUG=1`: each invalid reply is saved, with secrets redacted, to
+`.promapkin/llm-debug/` (local only; it can contain text from your documents).
+
+OmniRoute's DeepSeek Web provider replays only the last 20 messages of a conversation. `ask` repeats your question
+in the system prompt so long tool loops keep it.
+
 On the first-party Anthropic API, requests opt into server-side refusal fallback (`llm_fallbacks`, on by
 default; skipped automatically behind custom base URLs).
 
@@ -58,8 +81,10 @@ default; skipped automatically behind custom base URLs).
   `llm_extraction`, LLM interpretations `llm_inference`, so graph traversal weighs them accordingly.
 - **Structured outputs.** All analysis calls use strict JSON schemas (`output_config.format` on Anthropic,
   `response_format: json_schema` with `strict: true` on OpenAI).
-- **Fallbacks.** Any failure, refusal or budget exhaustion falls back to the deterministic implementation for that
-  item; the command still completes.
+- **Fallbacks.** Any failure, refusal, invalid reply or budget exhaustion falls back to the deterministic
+  implementation for that item; the command still completes. A failed document analysis keeps the regex-extracted
+  facts unchanged.
+- **No network calls under the index lock.** LLM calls run before or after write transactions, never inside them.
 - **Caching.** Responses are cached in the index by a hash of provider, model, task and exact input: unchanged
   files are never re-sent.
 - **Cost bound.** `llm_max_calls` (default 2,000 per command) and `llm_concurrency` (default 4). Each run prints

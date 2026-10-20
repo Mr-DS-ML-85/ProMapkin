@@ -181,10 +181,23 @@ def searchable(*parts: str | None) -> str:
     return " ".join(words)
 
 
+class StoreBusy(RuntimeError):
+    """Another process held the index's write lock for longer than the busy timeout."""
+
+
+BUSY_HINT = ("another promapkin process (a scan, sync, blueprint run or the MCP server) is writing to {path}; "
+             "waited {timeout:g}s. Retry when it finishes, or raise db_busy_timeout in .promapkin/config.json")
+
+
+def is_locked_error(exc: BaseException) -> bool:
+    return isinstance(exc, sqlite3.OperationalError) and "locked" in str(exc).lower()
+
+
 class Store:
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, busy_timeout: float = 30.0):
         self.path = str(path)
-        self.conn = sqlite3.connect(self.path, isolation_level=None, timeout=30)
+        self.busy_timeout = busy_timeout
+        self.conn = sqlite3.connect(self.path, isolation_level=None, timeout=busy_timeout)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
@@ -215,7 +228,13 @@ class Store:
     def transaction(self) -> Iterator[None]:
         """Nestable write transaction; the outermost one commits or rolls back."""
         if self._depth == 0:
-            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError as exc:
+                # Nothing has run yet, so there is nothing to roll back; the busy timeout already waited.
+                if is_locked_error(exc):
+                    raise StoreBusy(BUSY_HINT.format(path=self.path, timeout=self.busy_timeout)) from exc
+                raise
         self._depth += 1
         try:
             yield

@@ -410,19 +410,33 @@ def describe_class(ctx: Ctx, n: dict[str, Any]) -> str:
             f"bases: {' '.join(n['attrs'].get('bases', [])) or 'none'}; doc: {(n['text'] or '')[:120]}")
 
 
-def patterns(ctx: Ctx) -> dict[str, Any]:
+def pattern_candidates(ctx: Ctx) -> tuple[list[dict[str, Any]], list[str]]:
+    """Non-test classes and their structural descriptions (read-only)."""
     s = ctx.store
-    clf = ctx.rt.classifier
-    s.delete_nodes("kind='pattern' AND evidence IN (?, ?, ?)", (ev.HEURISTIC, ev.ML_CLASSIFIER, ev.LLM_INFERENCE))
-    found = []
     candidates = []
     for n in s.nodes("class"):
         mod = s.node(module_of(s, n["id"]) or "") or {}
         if n["attrs"].get("test") or mod.get("attrs", {}).get("test"):
             continue
         candidates.append(n)
+    return candidates, [describe_class(ctx, n) for n in candidates]
+
+
+def warm_patterns(ctx: Ctx) -> None:
+    """--llm: classify the candidates before the write transaction, so the specialist itself only reads
+    cached answers while it holds the lock."""
     llm = getattr(ctx.ws, "llm", None)
-    descs = [describe_class(ctx, n) for n in candidates]
+    if llm is not None:
+        ctx.rt.classifier.classify_many("design_pattern", pattern_candidates(ctx)[1], llm)
+
+
+def patterns(ctx: Ctx) -> dict[str, Any]:
+    s = ctx.store
+    clf = ctx.rt.classifier
+    s.delete_nodes("kind='pattern' AND evidence IN (?, ?, ?)", (ev.HEURISTIC, ev.ML_CLASSIFIER, ev.LLM_INFERENCE))
+    found = []
+    candidates, descs = pattern_candidates(ctx)
+    llm = getattr(ctx.ws, "llm", None)
     for n, desc, c in zip(candidates, descs, clf.classify_many("design_pattern", descs, llm)):
         if c.label in ("none", "unknown") or c.confidence < 0.45:
             continue

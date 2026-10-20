@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,7 +50,8 @@ def make_client(cfg: Any, settings: LLMSettings, usage: Usage | None = None) -> 
         return AnthropicClient(settings.model, usage, api_key=settings.api_key, base_url=settings.base_url or None,
                                timeout=cfg.llm_timeout, fallbacks=cfg.llm_fallbacks)
     return OpenAIClient(settings.model, usage, api_key=settings.api_key, base_url=settings.base_url or None,
-                        timeout=cfg.llm_timeout, reasoning_effort=cfg.openai_reasoning_effort or None)
+                        timeout=cfg.llm_timeout, reasoning_effort=cfg.openai_reasoning_effort or None,
+                        structured_output=os.environ.get("PROMAPKIN_LLM_STRUCTURED") or cfg.openai_structured_output)
 
 
 def make_engine(ws: Any, provider: str | None = None, model: str | None = None, base_url: str | None = None,

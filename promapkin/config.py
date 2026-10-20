@@ -39,10 +39,12 @@ class Config:
     openai_base_url: str = ""         # any OpenAI-compatible endpoint (Azure gateway, vLLM, Ollama, LM Studio)
     openai_api_key_env: str = "OPENAI_API_KEY"
     openai_reasoning_effort: str = ""  # low | medium | high for reasoning models; empty = model default
+    openai_structured_output: str = "json_schema"  # json_schema | json_object | prompt (endpoint ignores schemas)
     llm_max_calls: int = 2000         # per command invocation
     llm_concurrency: int = 4
     llm_timeout: float = 300.0
     llm_fallbacks: bool = True        # Anthropic server-side refusal fallback (first-party API only)
+    db_busy_timeout: float = 30.0     # seconds to wait for another process's write transaction
     layers: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
@@ -90,7 +92,7 @@ class Workspace:
         if self._store is None:
             if not self.dir.exists():
                 self.init()
-            self._store = Store(self.db_path)
+            self._store = Store(self.db_path, busy_timeout=self.config.db_busy_timeout)
         return self._store
 
     def revision(self) -> str:
