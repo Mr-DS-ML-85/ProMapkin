@@ -65,6 +65,7 @@ def _to_facts(path: str, rec: dict) -> Facts:
                                        "imports": {}})
     f.edge(f"file:{path}", mod_id, "defines", ev.AST)
 
+    decl_ids = {_sym(mod, d["qual"]) for d in rec["decls"]}
     for d in rec["decls"]:
         sid = _sym(mod, d["qual"])
         kind = d["kind"]
@@ -80,7 +81,11 @@ def _to_facts(path: str, rec: dict) -> Facts:
         f.node(sid, kind, d["name"], ev.AST, qualname=f"{mod}.{d['qual']}", file=path, line_start=d["line_start"],
                line_end=d["line_end"], text=d.get("doc"), attrs=attrs)
         parent = _sym(mod, d["qual"].rsplit(".", 1)[0]) if "." in d["qual"] else mod_id
-        f.edge(parent, sid, "contains" if "." in d["qual"] else "defines", ev.AST, line=d["line_start"])
+        if parent != mod_id and parent not in decl_ids:
+            # Dotted qual whose container has no declaration of its own (e.g. `const api = {…}`
+            # object literals): attach to the module instead of a node that does not exist.
+            parent = mod_id
+        f.edge(parent, sid, "contains" if parent != mod_id else "defines", ev.AST, line=d["line_start"])
         for inj in d.get("injected") or []:
             ref = _target_ref(inj.get("target"))
             if ref:

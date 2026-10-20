@@ -152,6 +152,7 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
             stats["warnings"] = warnings
             stats["parsers"] = parsers
             stats["runtime_edges_stale"] = _stale_runtime_edges(store, touched) if incremental else 0
+            _prune_dangling_edges(store)
             store.conn.execute("DELETE FROM meta WHERE key LIKE 'ctx:%'")   # context packages are revision-bound
             store.set_meta("indexed_revision", revision)
             store.set_meta("indexed_at", str(time.time()))
@@ -255,6 +256,14 @@ def _stale_runtime_edges(store: Store, touched: set[str]) -> int:
     store.conn.execute("DELETE FROM edges WHERE evidence=? AND (src NOT IN (SELECT id FROM nodes) OR "
                        "dst NOT IN (SELECT id FROM nodes))", (ev.RUNTIME,))
     return n
+
+
+def _prune_dangling_edges(store: Store) -> int:
+    """Edges whose endpoints vanished (cross-file renames, extractor gaps) would otherwise be
+    reported by `verify` forever; dropped once extraction and resolution are complete."""
+    return store.conn.execute(
+        "DELETE FROM edges WHERE src NOT IN (SELECT id FROM nodes) OR dst NOT IN (SELECT id FROM nodes)"
+    ).rowcount
 
 
 def _candidate_files(ws: Workspace) -> list[str]:

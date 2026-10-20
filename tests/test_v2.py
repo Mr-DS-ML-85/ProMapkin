@@ -169,6 +169,70 @@ class TypeScriptBridgeTest(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_object_literal_container_leaves_no_dangling_edges(self):
+        from promapkin.extract import ts_ext
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            (tmp / "background.js").write_text(
+                "const api = {\n  attach() { return 1; },\n  health() { return 2; },\n};\n"
+                "export default api;\n")
+            out = ts_ext.extract_batch(tmp, ["background.js"])
+            f = out["background.js"]
+            # the scanner creates the `file:` node before persisting facts
+            ids = {n["id"] for n in f.nodes} | {"file:background.js"}
+            for e in f.edges:
+                self.assertIn(e["src"], ids, f"dangling edge src: {e}")
+                self.assertIn(e["dst"], ids, f"dangling edge dst: {e}")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class ContainerGuardTest(unittest.TestCase):
+    """`_to_facts` must never edge to a container that has no declaration (e.g. `const api = {…}`),
+    and a scan must drop edges whose endpoints vanished."""
+
+    def test_undeclared_container_falls_back_to_module(self):
+        from promapkin.extract.ts_ext import _to_facts
+        rec = {"module": "bg", "lines": 10,
+               "decls": [
+                   {"kind": "class", "qual": "Widget", "name": "Widget", "line_start": 1, "line_end": 2},
+                   {"kind": "method", "qual": "api.attach", "name": "attach", "line_start": 3, "line_end": 4},
+                   {"kind": "method", "qual": "api.health", "name": "health", "line_start": 5, "line_end": 6},
+                   {"kind": "method", "qual": "Widget.render", "name": "render", "line_start": 7, "line_end": 8},
+               ],
+               "imports": [], "calls": [], "inherits": [], "routes": [], "env": [], "events": []}
+        f = _to_facts("bg/background.js", rec)
+        # the scanner creates the `file:` node before persisting facts
+        ids = {n["id"] for n in f.nodes} | {"file:bg/background.js"}
+        for e in f.edges:
+            self.assertIn(e["src"], ids, f"dangling edge src: {e}")
+            self.assertIn(e["dst"], ids, f"dangling edge dst: {e}")
+        edges = {(e["src"], e["dst"], e["type"]) for e in f.edges}
+        self.assertIn(("module:bg", "symbol:bg:api.attach", "defines"), edges)
+        self.assertIn(("symbol:bg:Widget", "symbol:bg:Widget.render", "contains"), edges)
+
+    def test_scan_prunes_edges_to_missing_nodes(self):
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            (tmp / "app.py").write_text("def main():\n    return 1\n")
+            git(tmp, "init", "-q")
+            git(tmp, "add", "-A")
+            git(tmp, "commit", "-qm", "x")
+            ws = Workspace(tmp)
+            ws.init()
+            scan(ws)
+            with ws.store.transaction():
+                ws.store.add_edge("symbol:app:ghost", "symbol:app:main", "contains",
+                                  evidence="ast", owner_file="app.py")
+            count = "SELECT COUNT(*) FROM edges WHERE src NOT IN (SELECT id FROM nodes) " \
+                    "OR dst NOT IN (SELECT id FROM nodes)"
+            self.assertGreater(ws.store.conn.execute(count).fetchone()[0], 0)  # precondition
+            scan(ws)  # incremental scan with no file changes
+            self.assertEqual(ws.store.conn.execute(count).fetchone()[0], 0)
+            ws.close()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 class DynamicWiringAndRuntimeTest(RepoTestCase):
     def test_static_wiring_detection(self):
