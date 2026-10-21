@@ -588,8 +588,9 @@ def cluster_modules(store: Store, model: str | None, min_similarity: float = 0.6
     out = []
     for members in groups.values():
         kw = _keywords(store, members)
-        internal = sum(w for a in members for b, w in weights.get(a, {}).items() if b in members) / 2
-        external = sum(w for a in members for b, w in weights.get(a, {}).items() if b not in members)
+        member_set = set(members)       # a list made this quadratic in community size (Linux: thousands)
+        internal = sum(w for a in members for b, w in weights.get(a, {}).items() if b in member_set) / 2
+        external = sum(w for a in members for b, w in weights.get(a, {}).items() if b not in member_set)
         cohesion = internal / (internal + external) if internal + external else 0.0
         out.append({"component": " / ".join(kw[:2]) or members[0].removeprefix("module:"), "modules": sorted(members),
                     "method": f"label propagation (imports + {model} similarity)", "confidence": round(
