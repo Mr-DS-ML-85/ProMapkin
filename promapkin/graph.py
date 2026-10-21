@@ -367,9 +367,10 @@ class Graph:
     # ---------------------------------------------------------------- dependencies
     def module_dependencies(self) -> dict[str, set[str]]:
         deps: dict[str, set[str]] = defaultdict(set)
-        for e in self.store.edges(types=["imports"]):
-            if e["src"].startswith("module:") and e["dst"].startswith("module:"):
-                deps[e["src"]].add(e["dst"])
+        for src, dst in self.store.conn.execute(
+                "SELECT src, dst FROM edges WHERE type='imports' AND src LIKE 'module:%' AND dst LIKE 'module:%' "
+                "ORDER BY id"):
+            deps[src].add(dst)
         return deps
 
     def dependency_report(self, ref: str | None = None, depth: int = 3) -> dict[str, Any]:
@@ -421,41 +422,53 @@ def _bfs(start: str, adj: dict[str, set[str]], depth: int) -> list[dict[str, Any
 
 
 def find_cycles(adj: dict[str, set[str]]) -> list[list[str]]:
-    """Strongly connected components with more than one node (Tarjan)."""
+    """Strongly connected components with more than one node (Tarjan, iterative: include graphs such as the Linux
+    kernel's are far deeper than Python's recursion limit). Components come out in the recursive algorithm's
+    order."""
     index: dict[str, int] = {}
     low: dict[str, int] = {}
     stack: list[str] = []
     on: set[str] = set()
     out: list[list[str]] = []
-    counter = [0]
-
-    def strong(v: str) -> None:
-        index[v] = low[v] = counter[0]
-        counter[0] += 1
-        stack.append(v)
-        on.add(v)
-        for w in adj.get(v, ()):
-            if w not in index:
-                strong(w)
-                low[v] = min(low[v], low[w])
-            elif w in on:
-                low[v] = min(low[v], index[w])
-        if low[v] == index[v]:
-            comp = []
-            while True:
-                w = stack.pop()
-                on.discard(w)
-                comp.append(w)
-                if w == v:
+    counter = 0
+    for root in list(adj):
+        if root in index:
+            continue
+        index[root] = low[root] = counter
+        counter += 1
+        stack.append(root)
+        on.add(root)
+        work = [(root, iter(adj.get(root, ())))]
+        while work:
+            v, it = work[-1]
+            advanced = False
+            for w in it:
+                if w not in index:
+                    index[w] = low[w] = counter
+                    counter += 1
+                    stack.append(w)
+                    on.add(w)
+                    work.append((w, iter(adj.get(w, ()))))
+                    advanced = True
                     break
-            if len(comp) > 1:
-                out.append(sorted(comp))
-
-    import sys
-    sys.setrecursionlimit(max(10000, sys.getrecursionlimit()))
-    for v in list(adj):
-        if v not in index:
-            strong(v)
+                if w in on:
+                    low[v] = min(low[v], index[w])
+            if advanced:
+                continue
+            work.pop()
+            if work:
+                parent = work[-1][0]
+                low[parent] = min(low[parent], low[v])
+            if low[v] == index[v]:
+                comp = []
+                while True:
+                    w = stack.pop()
+                    on.discard(w)
+                    comp.append(w)
+                    if w == v:
+                        break
+                if len(comp) > 1:
+                    out.append(sorted(comp))
     return out
 
 

@@ -12,7 +12,7 @@ import math
 import zlib
 import re
 from array import array
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 from promapkin.store import split_identifier
 
@@ -62,6 +62,33 @@ def top_k(query: Vector, items: list[tuple[str, bytes]], k: int) -> list[tuple[s
 
 
 _HASH_CACHE: dict[str, int] = {}
+
+
+def store_top_k(store: Any, model: str, query: Vector, k: int, chunk: int = 20000) -> list[tuple[str, float]]:
+    """Cosine top-k over every stored vector of `model`, streamed in chunks: memory is O(chunk + k) however many
+    vectors the index holds (top_k over store.embeddings() would load them all at once)."""
+    import heapq
+    rows = store.conn.execute("SELECT e.id, e.vec FROM embeddings e JOIN nodes n ON n.id=e.id WHERE e.model=?",
+                              (model,))
+    if _np is None:
+        def scored() -> Iterable[tuple[float, str]]:
+            for nid, blob in rows:
+                yield cosine(query, unpack(blob)), nid
+        return [(nid, s) for s, nid in sorted(heapq.nlargest(k, scored()), key=lambda t: (-t[0], t[1]))]
+    q = _np.asarray(query, dtype=_np.float32)
+    best: list[tuple[float, str]] = []
+    while True:
+        fetched = rows.fetchmany(chunk)
+        if not fetched:
+            break
+        batch = [r for r in fetched if len(r[1]) == q.nbytes]   # vectors of another dimension cannot match
+        if not batch:
+            continue
+        mat = _np.frombuffer(b"".join(r[1] for r in batch), dtype=_np.float32).reshape(len(batch), -1)
+        scores = mat @ q
+        top = _np.argpartition(-scores, min(k, len(batch)) - 1)[:k] if len(batch) > k else range(len(batch))
+        best = heapq.nlargest(k, best + [(float(scores[i]), batch[i][0]) for i in top])
+    return [(nid, s) for s, nid in sorted(best, key=lambda t: (-t[0], t[1]))]   # ties in id order
 
 
 def _hash(feature: str) -> int:

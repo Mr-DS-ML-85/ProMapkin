@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import itertools
 import subprocess
 import json
 import os
@@ -58,7 +59,31 @@ class _Timer:
         now = time.perf_counter()
         self.timings[phase] = round(self.timings.get(phase, 0.0) + now - self._t, 3)
         self._t = now
-        self.say(f"  {phase}: {self.timings[phase]:.2f}s")
+        rss = _rss_mb()
+        self.say(f"  {phase}: {self.timings[phase]:.2f}s" + (f"  (rss {rss} MB)" if rss else ""))
+
+
+def _rss_mb() -> int | None:
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return None
+
+
+def _release_memory() -> None:
+    """Hand memory freed by a large pass back to the OS before the next one (and before worker processes are
+    started), instead of leaving it in the allocator's free lists."""
+    import gc
+    gc.collect()
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] | None = None,
@@ -111,22 +136,22 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
         # Parse before taking the write lock: parsers and LLM extraction are the slow part of a scan, and
         # other promapkin processes (MCP server, a second terminal) must not wait on them.
         parsed = _batch_parse(ws, [p for p in changed if contents[p][1] in ("javascript", "typescript")], errors)
-        extracted: dict[str, tuple[str, bool, Facts | None, str | None]] = {}
+        # Extracted facts wait on disk, not in memory: a kernel-sized scan produces gigabytes of them.
+        spool = _Spool(ws.dir)
         todo = [p for p in changed if p not in parsed]
         workers = _scan_workers(ws, len(todo))
         if workers > 1:
             # Extraction is pure (no index access, no LLM in this mode): spread it over processes.
-            extracted.update(_extract_parallel(ws, [(p, contents[p][1], contents[p][2]) for p in todo], workers,
-                                               errors))
+            _extract_parallel(ws, [(p, contents[p][1], contents[p][2]) for p in todo], workers, spool, errors)
             timer.mark(f"parse ({workers} processes)")
         for p in changed:
-            if p in extracted:
+            if p in spool:
                 continue
             if contents[p][1] in ASSET_LANGUAGES:
-                extracted[p] = ("", False, *_extract_asset(ws, p, contents[p][1], contents[p][2], errors))
+                spool.add(p, False, *_extract_asset(ws, p, contents[p][1], contents[p][2], errors))
                 continue
             text = (ws.root / p).read_text(encoding="utf-8", errors="replace")
-            facts = parsed.get(p)
+            facts = parsed.pop(p, None)
             parser = "typescript-compiler" if facts else None
             if facts is None:
                 facts, parser = _extract_one(ws, p, contents[p][1], text, errors)
@@ -135,8 +160,14 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
                     data_links.annotate(facts, text, contents[p][1])
                 except Exception as exc:  # noqa: BLE001 - data links are an enrichment; never lose the file
                     errors.append(f"{p}: data links skipped ({type(exc).__name__}: {str(exc)[:120]})")
-            extracted[p] = (text, is_generated(p, text), facts, parser)
+            spool.add(p, is_generated(p, text), facts, parser)
         timer.mark("parse")
+        # A previous scan that died during enrichment (killed, out of memory) left its structural index committed
+        # but not its classifications and disambiguations: redo resolution in full so those are recomputed.
+        pending = store.get_meta("enrichment_pending") == "1"
+        warnings: list[str] = []
+        # Transaction 1: the structural index (files, symbols, resolved edges). Committed on its own so that a
+        # failure in the enrichment passes below can never cost the extraction work.
         with store.transaction():
             # Capture what other files may depend on before the old facts disappear.
             old_names = _defined_names(store, touched) if incremental else set()
@@ -147,7 +178,7 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
             for p in changed:
                 store.forget_file(p)
                 sha, lang, size = contents[p]
-                text, generated, facts, parser = extracted[p]
+                generated, facts, parser = spool.get(p)
                 store.upsert_file(p, sha, lang, size, revision)
                 store.upsert_node(f"file:{p}", "file", PurePosixPath(p).name, evidence=ev.AST, file=p,
                                   owner_file=p, revision=revision,
@@ -162,34 +193,41 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
                             n.setdefault("attrs", {})["generated"] = True
                 errors += [f"{p}: {e}" for e in facts.errors]
                 _persist(store, facts, revision)
+            spool.close()
             timer.mark("extract")
             _structure(store, ws, list(contents), revision)
             timer.mark("structure")
-            ambiguous: list[dict[str, Any]] = []
+            ambiguous = _DiskList(ws.dir)
             scope = None
-            if incremental:
+            if incremental and not pending:
                 names = old_names | _defined_names(store, touched)
                 scope = touched | inbound | _files_referencing(store, names)
             stats = resolve(store, revision, ambiguous, files=scope)
+            _release_memory()
             timer.mark("resolve")
-            warnings: list[str] = []
-            if (changed or deleted or full) and llm is None:
-                stats["classified"] = _optional("classification", warnings, classify_pass, store, rt, revision) or {}
-            timer.mark("classify")
             stats["stale_inferences"] = _mark_stale(store, set(changed) | set(deleted)) if not full else 0
-            _gc_shared(store)
-            timer.mark("freshness")
-            stats.update(_optional("graph ML", warnings, graph_ml_pass, store, rt, ambiguous, revision,
-                                   timer) or {})
-            stats["warnings"] = warnings
-            stats["parsers"] = parsers
             stats["runtime_edges_stale"] = _stale_runtime_edges(store, touched) if incremental else 0
             _prune_dangling_edges(store)
             store.conn.execute("DELETE FROM meta WHERE key LIKE 'ctx:%'")   # context packages are revision-bound
             store.set_meta("indexed_revision", revision)
             store.set_meta("indexed_at", str(time.time()))
+            store.set_meta("enrichment_pending", "1")
+            timer.mark("commit structure")
+        # Transaction 2: enrichment (classification, embeddings, graph ML, disambiguation).
+        with store.transaction():
+            if (changed or deleted or full or pending) and llm is None:
+                stats["classified"] = _optional("classification", warnings, classify_pass, store, rt, revision) or {}
+            _gc_shared(store)
+            timer.mark("classify")
+            stats.update(_optional("graph ML", warnings, graph_ml_pass, store, rt, ambiguous, revision,
+                                   timer) or {})
+            ambiguous.close()
+            _prune_dangling_edges(store)
             store.set_meta("ml", json.dumps(rt.describe()))
+            store.conn.execute("DELETE FROM meta WHERE key='enrichment_pending'")
             timer.mark("finalize")
+        stats["warnings"] = warnings
+        stats["parsers"] = parsers
         if (changed or deleted or full) and llm is not None:
             # --llm: ask the model with no lock held (answers land in the response cache), then apply them in
             # a short transaction that never goes to the network. The structural index above is already
@@ -305,36 +343,126 @@ def _scan_workers(ws: Workspace, n_files: int) -> int:
     return max(1, min(want, n_files // max(1, PARALLEL_MIN_FILES // 4)))
 
 
-def _extract_parallel(ws: Workspace, jobs: list[tuple[str, str, int]], workers: int, errors: list[str]
-                      ) -> dict[str, tuple[str, bool, Facts | None, str | None]]:
-    from concurrent.futures import ProcessPoolExecutor
+class _Spool:
+    """Extracted facts on disk between the lock-free parse phase and the write transaction, read back one file
+    at a time. The temporary file is deleted on close (and by the OS if the process dies)."""
+
+    def __init__(self, directory: Path):
+        import tempfile
+        directory.mkdir(parents=True, exist_ok=True)
+        self.fh = tempfile.TemporaryFile(prefix="scan-", suffix=".spool", dir=directory)
+        self.offsets: dict[str, int] = {}
+
+    def __contains__(self, rel: str) -> bool:
+        return rel in self.offsets
+
+    def add(self, rel: str, generated: bool, facts: Facts | None, parser: str | None) -> None:
+        import pickle
+        self.fh.seek(0, os.SEEK_END)
+        self.offsets[rel] = self.fh.tell()
+        pickle.dump((generated, facts, parser), self.fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def get(self, rel: str) -> tuple[bool, Facts | None, str | None]:
+        import pickle
+        self.fh.seek(self.offsets[rel])
+        return pickle.load(self.fh)
+
+    def close(self) -> None:
+        self.fh.close()
+
+
+class _DiskList:
+    """An append-only list that keeps at most `buffer` items in memory and the rest pickled in a temporary file.
+    Resolution of the Linux kernel collects a million ambiguous references; held as dicts they take a gigabyte."""
+
+    def __init__(self, directory: Path, buffer: int = 5000):
+        import tempfile
+        directory.mkdir(parents=True, exist_ok=True)
+        self._dir, self._fh, self._buf, self._n, self._limit = directory, None, [], 0, buffer
+        self._tempfile = tempfile
+
+    def append(self, item: Any) -> None:
+        self._buf.append(item)
+        self._n += 1
+        if len(self._buf) >= self._limit:
+            self._spill()
+
+    def _spill(self) -> None:
+        import pickle
+        if self._fh is None:
+            self._fh = self._tempfile.TemporaryFile(prefix="refs-", suffix=".spool", dir=self._dir)
+        self._fh.seek(0, os.SEEK_END)
+        pickle.dump(self._buf, self._fh, protocol=pickle.HIGHEST_PROTOCOL)
+        self._buf = []
+
+    def __len__(self) -> int:
+        return self._n
+
+    def __iter__(self) -> Any:
+        import pickle
+        if self._fh is not None:
+            self._fh.seek(0)
+            while True:
+                try:
+                    chunk = pickle.load(self._fh)
+                except EOFError:
+                    break
+                yield from chunk
+        yield from list(self._buf)
+
+    def close(self) -> None:
+        if self._fh is not None:
+            self._fh.close()
+        self._buf = []
+
+
+PARALLEL_CHUNK = 48
+
+
+def _extract_parallel(ws: Workspace, jobs: list[tuple[str, str, int]], workers: int, spool: _Spool,
+                      errors: list[str]) -> None:
+    """Extract in worker processes. A bounded window of chunks is in flight and each finished chunk goes
+    straight to the spool, so memory stays flat however large the repository is."""
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
     import multiprocessing
 
-    out: dict[str, tuple[str, bool, Facts | None, str | None]] = {}
-    chunks = [jobs[i::workers * 4] for i in range(workers * 4)]
+    # Big files first, so one huge file does not finish last; then contiguous chunks.
+    jobs = sorted(jobs, key=lambda j: -j[2])
+    chunks = [jobs[i:i + PARALLEL_CHUNK] for i in range(0, len(jobs), PARALLEL_CHUNK)]
     ctx = multiprocessing.get_context("spawn" if os.name == "nt" else "fork")
     try:
         with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
-            for results, errs in pool.map(_extract_chunk, [(str(ws.root), c) for c in chunks if c]):
-                out.update(results)
-                errors.extend(errs)
+            pending: set[Any] = set()
+            it = iter(chunks)
+            while True:
+                while len(pending) < workers * 3:
+                    chunk = next(it, None)
+                    if chunk is None:
+                        break
+                    pending.add(pool.submit(_extract_chunk, (str(ws.root), chunk)))
+                if not pending:
+                    break
+                done, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    results, errs = fut.result()
+                    for rel, generated, facts, parser in results:
+                        spool.add(rel, generated, facts, parser)
+                    errors.extend(errs)
     except (OSError, RuntimeError) as exc:   # no fork/spawn available: extract in this process instead
         errors.append(f"parallel extraction unavailable ({exc}); extracted sequentially")
-        return {}
-    return out
 
 
 def _extract_chunk(arg: tuple[str, list[tuple[str, str, int]]]
-                   ) -> tuple[dict[str, tuple[str, bool, Facts | None, str | None]], list[str]]:
+                   ) -> tuple[list[tuple[str, bool, Facts | None, str | None]], list[str]]:
     root, jobs = arg
     from promapkin.config import Config
     from types import SimpleNamespace
     ws = SimpleNamespace(root=Path(root), llm=None, config=Config.load(Path(root) / ".promapkin" / "config.json"))
     errors: list[str] = []
-    results = {}
+    results = []
     for rel, lang, size in jobs:
         if lang in ASSET_LANGUAGES:
-            results[rel] = ("", False, *_extract_asset(ws, rel, lang, size, errors))  # type: ignore[arg-type]
+            results.append((rel, False, *_extract_asset(ws, rel, lang, size, errors)))  # type: ignore[arg-type]
             continue
         try:
             text = (ws.root / rel).read_text(encoding="utf-8", errors="replace")
@@ -347,7 +475,7 @@ def _extract_chunk(arg: tuple[str, list[tuple[str, str, int]]]
                 data_links.annotate(facts, text, lang)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{rel}: data links skipped ({type(exc).__name__}: {str(exc)[:120]})")
-        results[rel] = (text, is_generated(rel, text), facts, parser)
+        results.append((rel, is_generated(rel, text), facts, parser))
     return results, errors
 
 
@@ -467,28 +595,59 @@ def _structure(store: Store, ws: Workspace, files: list[str], revision: str) -> 
 
 # ------------------------------------------------------------------------------------- resolution
 
+class _Sym:
+    """What resolution needs about a symbol, without its text: about a tenth of a full node in memory, which
+    matters at millions of symbols. `attrs` (bases, methods, returns, decorators) is read on first use."""
+
+    __slots__ = ("id", "kind", "name", "qualname", "file", "line_start", "test", "_store", "_attrs")
+
+    def __init__(self, store: Store, id: str, kind: str, name: str, qualname: str | None, file: str | None,
+                 line_start: int | None, test: bool):
+        self._store, self.id, self.kind, self.name, self.qualname = store, id, kind, name, qualname
+        self.file, self.line_start, self.test, self._attrs = file, line_start, test, None
+
+    @property
+    def attrs(self) -> dict[str, Any]:
+        if self._attrs is None:
+            row = self._store.conn.execute("SELECT attrs FROM nodes WHERE id=?", (self.id,)).fetchone()
+            self._attrs = json.loads(row[0]) if row else {}
+        return self._attrs
+
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
+
 class Resolver:
     def __init__(self, store: Store):
+        import sys
         self.store = store
-        self.symbols: dict[str, dict] = {}
+        self.symbols: dict[str, _Sym] = {}
         self.by_qual: dict[str, str] = {}
         self.by_name: dict[str, list[str]] = {}
         self.modules: dict[str, dict] = {}
         self.files: set[str] = set()
         self.last_ambiguous: list[str] = []
         self.aliases: dict[str, dict[str, str]] = {}
-        for n in store.nodes(where="kind IN ('class','function','method','test','module','endpoint','file',"
-                                   "'decision','document','doc_section')"):
-            if n["kind"] == "module":
-                self.modules[n["name"]] = n
-                self.by_qual[n["name"]] = n["id"]
-            elif n["kind"] == "file":
-                self.files.add(n["file"])
-            elif n["kind"] in ("class", "function", "method", "test"):
-                self.symbols[n["id"]] = n
-                if n["qualname"]:
-                    self.by_qual[n["qualname"]] = n["id"]
-                self.by_name.setdefault(n["name"], []).append(n["id"])
+        for n in store.nodes("module"):
+            self.modules[n["name"]] = n
+            self.by_qual[n["name"]] = n["id"]
+        self.files = {r[0] for r in store.conn.execute("SELECT file FROM nodes WHERE kind='file'")}
+        intern = sys.intern
+        test_file: dict[str | None, bool] = {}
+        for nid, kind, name, qual, file, line, stype in store.conn.execute(
+                "SELECT id, kind, name, qualname, file, line_start, json_extract(attrs, '$.symbol_type') FROM nodes "
+                "WHERE kind IN ('class','function','method','test')"):
+            name, file = intern(name), intern(file) if file else file
+            if file not in test_file:
+                test_file[file] = is_test_path(file or "")
+            self.symbols[nid] = _Sym(store, nid, intern(kind), name, qual, file, line,
+                                     stype == "test" or test_file[file])
+            if qual:
+                self.by_qual[qual] = nid
+            self.by_name.setdefault(name, []).append(nid)
 
     def module_for(self, target: str) -> str | None:
         t = target[2:] if target.startswith("./") else target
@@ -683,7 +842,7 @@ class Resolver:
         if len(parts) < 2 or not parts[-2][:1].isupper():
             return None
         classes = [c for c in self.by_name.get(parts[-2], []) if self.symbols[c]["kind"] == "class"]
-        non_test = [c for c in classes if not is_test_path(self.symbols[c]["file"] or "")]
+        non_test = [c for c in classes if not self.symbols[c].test]
         if len(non_test) == 1:
             c = self.symbols[non_test[0]]
             hit = self._method(self._module_of(c["id"]), c["name"], parts[-1])
@@ -696,7 +855,7 @@ class Resolver:
         if qual in self.by_qual:
             return self.by_qual[qual]
         cls_id = self.by_qual.get(f"{module}.{cls}")
-        if cls_id and depth < 3:
+        if cls_id in self.symbols and depth < 3:   # by_qual also maps submodules (`pkg.sub`), which have no bases
             for base in self.symbols[cls_id]["attrs"].get("bases", []):
                 r = self.resolve_symbol(base, {"module": module})
                 if r and r[0] in self.symbols:
@@ -713,8 +872,7 @@ class Resolver:
         cands = [c for c in self.by_name.get(name, []) if self.symbols[c]["kind"] in kinds]
         if len(cands) == 1:
             return cands[0], ev.NAME_MATCH, 0.6
-        non_test = [c for c in cands if not self.symbols[c]["attrs"].get("symbol_type") == "test"
-                    and not is_test_path(self.symbols[c]["file"] or "")]
+        non_test = [c for c in cands if not self.symbols[c].test]
         if len(non_test) == 1:
             return non_test[0], ev.NAME_MATCH, 0.5
         if 1 < len(non_test) <= 8:
@@ -801,7 +959,7 @@ class Resolver:
                         if self.symbols[c]["kind"] in ("class", "function")
                         and (self.symbols[c]["qualname"] or "").endswith("." + name))
         if suffix:
-            non_test = [c for c in suffix if not is_test_path(self.symbols[c]["file"] or "")]
+            non_test = [c for c in suffix if not self.symbols[c].test]
             return (non_test or suffix)[0]
         cands = [c for c in self.by_name.get(last, [])
                  if self.symbols[c]["kind"] in ("class", "function", "method")]
@@ -825,16 +983,17 @@ def resolve(store: Store, revision: str, ambiguous: list[dict[str, Any]] | None 
     ML (or heuristic) disambiguation pass."""
     if files is None:
         store.delete_edges("json_extract(attrs, '$.resolved') = 1")
-        refs = store.refs()
     else:
         for chunk in _chunked(sorted(files), 400):
             marks = ",".join("?" * len(chunk))
             store.delete_edges(f"json_extract(attrs, '$.resolved') = 1 AND owner_file IN ({marks})", chunk)
-        refs = store.refs(files)
     r = Resolver(store)
     resolved = unresolved = 0
-    # Imports first, so path-style `use` aliases are known before calls in the same module resolve.
-    refs.sort(key=lambda x: x["type"] != "imports")
+    package_evidence: dict[str, str | None] = {}     # memo: a kernel has 400k import references
+    is_test_module: dict[str, bool] = {}
+    # Imports first, so path-style `use` aliases are known before calls in the same module resolve. References
+    # are streamed: the Linux kernel has tens of millions.
+    refs = itertools.chain(store.iter_refs(files, "type = 'imports'"), store.iter_refs(files, "type != 'imports'"))
     for ref in refs:
         typ, src, target, ctx, line, owner = ref["type"], ref["src"], ref["target"], ref["context"], ref["line"], \
             ref["owner_file"]
@@ -846,16 +1005,21 @@ def resolve(store: Store, revision: str, ambiguous: list[dict[str, Any]] | None 
                 continue
             if dst.startswith("package:"):
                 pkg = dst.split(":", 1)[1]
-                existing = store.node(dst)
-                if not existing or existing["evidence"] != ev.MANIFEST:
+                if dst not in package_evidence:
+                    existing = store.node(dst)
+                    package_evidence[dst] = existing["evidence"] if existing else None
+                if package_evidence[dst] != ev.MANIFEST:
                     stdlib = _is_stdlib(pkg, owner)
                     store.upsert_node(dst, "package", pkg, evidence=ev.AST, revision=revision,
                                       attrs={"external": True, "stdlib": stdlib})
+                    package_evidence[dst] = ev.AST
             if ctx.get("wiring"):
                 attrs["wiring"] = ctx["wiring"]
             store.add_edge(src, dst, "imports", evidence=evidence, file=owner, line=line, owner_file=owner,
                            revision=revision, attrs=attrs)
-            if (store.node(src) or {}).get("attrs", {}).get("test") and dst.startswith("module:"):
+            if src not in is_test_module:
+                is_test_module[src] = bool((store.node(src) or {}).get("attrs", {}).get("test"))
+            if is_test_module[src] and dst.startswith("module:"):
                 store.add_edge(src, dst, "verifies", evidence=ev.HEURISTIC, confidence=0.6, file=owner, line=line,
                                owner_file=owner, revision=revision, attrs={**attrs, "via": "test import"})
             resolved += 1
@@ -1072,8 +1236,8 @@ def classify_pass(store: Store, rt: Any, revision: str, llm: Any = None, warm_on
         if len(lst) < 15:
             lst.append(dst.rsplit(":", 1)[-1])
     modules = store.nodes("module")
-    calls = [r for r in store.refs() if r["type"] == "external_call"]
-    uniq = sorted({(r["context"].get("library", ""), r["target"].split(".", 1)[-1]) for r in calls})
+    uniq = sorted({(r["context"].get("library", ""), r["target"].split(".", 1)[-1])
+                   for r in store.iter_refs(where="type = 'external_call'")})
     sections = store.nodes("doc_section")
     notes = store.nodes("code_note")
     module_labels = clf.classify_many("layer", [f"{m['name']} {(m['text'] or '')[:300]} "
@@ -1094,7 +1258,7 @@ def classify_pass(store: Store, rt: Any, revision: str, llm: Any = None, warm_on
     store.delete_edges("json_extract(attrs, '$.classifier_task')='resource'")
     seen: set[tuple[str, str]] = set()
     evidence = ev.LLM_INFERENCE if llm else ev.ML_CLASSIFIER
-    for ref in calls:
+    for ref in store.iter_refs(where="type = 'external_call'"):
         lib = ref["context"].get("library", "")
         call = ref["target"].split(".", 1)[-1]
         c = labels[(lib, call)]
@@ -1176,28 +1340,83 @@ def embedding_text(n: dict[str, Any]) -> str:
     return " ".join(p for p in parts if p)
 
 
+EMBED_BATCH = 512
+PARALLEL_EMBED_MIN = 20_000
+
+
 def embed_pass(store: Store, rt: Any) -> int:
+    """Embed nodes whose text changed. Streams the nodes; the built-in embedder (pure Python) runs in worker
+    processes when there are many, since a kernel-sized index has about a million symbols."""
     from promapkin.ml.embedders import pack
 
     total = 0
     kinds = ",".join(f"'{k}'" for k in EMBED_KINDS)
-    nodes = store.nodes(where=f"kind IN ({kinds})")
     for emb in rt.embedders():
         have = store.embedding_shas(emb.name)
-        todo = []
-        for n in nodes:
-            text = embedding_text(n)
-            sha = hashlib.sha1(text.encode()).hexdigest()
-            if have.get(n["id"]) != sha:
-                todo.append((n["id"], sha, text))
-        for i in range(0, len(todo), 64):
-            batch = todo[i:i + 64]
-            vecs = emb.embed([t for _, _, t in batch])
-            for (nid, sha, _), vec in zip(batch, vecs):
-                store.put_embedding(nid, emb.name, sha, pack(vec))
-        total += len(todo)
+
+        def batches() -> Any:
+            batch: list[tuple[str, str, str]] = []
+            for n in store.iter_nodes(where=f"kind IN ({kinds})"):
+                text = embedding_text(n)
+                sha = hashlib.sha1(text.encode()).hexdigest()
+                if have.get(n["id"]) != sha:
+                    batch.append((n["id"], sha, text))
+                    if len(batch) == EMBED_BATCH:
+                        yield batch
+                        batch = []
+            if batch:
+                yield batch
+
+        def put(batch: list[tuple[str, str, str]], blobs: list[bytes]) -> None:
+            store.conn.executemany("INSERT OR REPLACE INTO embeddings(id, model, sha, vec) VALUES (?,?,?,?)",
+                                   [(nid, emb.name, sha, blob) for (nid, sha, _), blob in zip(batch, blobs)])
+
+        missing = store.conn.execute(f"SELECT count(*) FROM nodes WHERE kind IN ({kinds})").fetchone()[0] - len(have)
+        workers = _scan_workers_for() if not emb.neural and missing >= PARALLEL_EMBED_MIN else 1
+        if workers > 1:
+            total += _embed_parallel(emb, batches(), put, workers)
+        else:
+            for batch in batches():
+                put(batch, [pack(v) for v in emb.embed([t for _, _, t in batch])])
+                total += len(batch)
     store.prune_embeddings()
     return total
+
+
+def _scan_workers_for() -> int:
+    env = os.environ.get("PROMAPKIN_WORKERS")
+    want = int(env) if env and env.isdigit() else 0
+    return want if want > 0 else min(8, os.cpu_count() or 1)
+
+
+def _embed_parallel(emb: Any, batches: Any, put: Callable[[list, list[bytes]], None], workers: int) -> int:
+    from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+    import multiprocessing
+
+    # Spawned, not forked: by now this process holds a large index in memory, and forked children would share
+    # (and gradually copy) all of it.
+    ctx = multiprocessing.get_context("spawn")
+    total = 0
+    with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
+        pending: dict[Any, list] = {}
+        for batch in batches:
+            pending[pool.submit(_embed_batch, emb, [t for _, _, t in batch])] = batch
+            if len(pending) >= workers * 3:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for fut in done:
+                    finished = pending.pop(fut)
+                    put(finished, fut.result())
+                    total += len(finished)
+        for fut in list(pending):
+            finished = pending.pop(fut)
+            put(finished, fut.result())
+            total += len(finished)
+    return total
+
+
+def _embed_batch(emb: Any, texts: list[str]) -> list[bytes]:
+    from promapkin.ml.embedders import pack
+    return [pack(v) for v in emb.embed(texts)]
 
 
 # ------------------------------------------------------------------------------------- freshness

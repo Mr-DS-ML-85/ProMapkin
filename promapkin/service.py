@@ -584,7 +584,7 @@ class Service:
                 kinds: list[str] | None = None) -> dict[str, Any]:
         self._require_index()
         from promapkin import ml
-        from promapkin.ml.embedders import top_k, unpack
+        from promapkin.ml.embedders import store_top_k, unpack
         from promapkin.ml.graph_ml import graph_model_name
         rt = ml.runtime(self.ws)
         if rt.classifier.mode == "heuristic":
@@ -600,10 +600,10 @@ class Service:
                     raise
                 text = ref   # not a node: treat it as a free-text query
         if nid:
-            vecs = dict(self.store.embeddings(model))
-            if nid not in vecs:
+            row = self.store.conn.execute("SELECT vec FROM embeddings WHERE id=? AND model=?", (nid, model)).fetchone()
+            if not row:
                 raise ServiceError(f"no embedding for {nid}")
-            q = unpack(vecs[nid])
+            q = unpack(row[0])
         elif text:
             # Free text is embedded by the text model, so it is scored against text-model vectors, not graph ones.
             q = rt.embedder.embed([text])[0]
@@ -611,7 +611,7 @@ class Service:
         else:
             raise ServiceError("give ref or text")
         res = []
-        for hit, score in top_k(q, self.store.embeddings(model), limit * 3):
+        for hit, score in store_top_k(self.store, model, q, limit * 3):
             n = self.store.node(hit)
             if not n or (nid and hit == nid) or (kinds and n["kind"] not in kinds):
                 continue

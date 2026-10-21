@@ -9,6 +9,8 @@ LLM providers, when configured, add a synthesis on top of these grounded facts.
 
 from __future__ import annotations
 
+import heapq
+
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -56,6 +58,22 @@ def loc(n: dict[str, Any] | None) -> str:
     if n.get("file") and n.get("line_start"):
         return f"{n['file']}:{n['line_start']}"
     return n.get("file") or n.get("id", "")
+
+
+def _symbols_by_id(s: Store, page: int = 5000) -> Any:
+    """Functions, methods and classes in id order with the few fields the register needs, a page at a time."""
+    last = ""
+    while True:
+        rows = s.conn.execute(
+            "SELECT id, qualname, file, line_start, json_extract(attrs, '$.test'), json_extract(attrs, '$.complexity') "
+            "FROM nodes WHERE kind IN ('function','method','class') AND id > ? ORDER BY id LIMIT ?",
+            (last, page)).fetchall()
+        if not rows:
+            return
+        last = rows[-1][0]
+        for nid, qual, file, line, test, complexity in rows:
+            yield {"id": nid, "qualname": qual, "file": file, "line_start": line, "test": test,
+                   "complexity": complexity}
 
 
 def module_of(store: Store, node_id: str) -> str | None:
@@ -175,6 +193,8 @@ def architecture(ctx: Ctx) -> dict[str, Any]:
     from promapkin.ml import graph_ml
 
     modules = {m["id"]: m for m in s.nodes("module")}
+    defines = dict(s.conn.execute("SELECT src, COUNT(*) FROM edges WHERE type='defines' AND src LIKE 'module:%' "
+                                  "GROUP BY src"))
     subsystems: dict[str, dict[str, Any]] = {}
     for mid, m in modules.items():
         sub = subsystem_of(m["file"])
@@ -184,15 +204,17 @@ def architecture(ctx: Ctx) -> dict[str, Any]:
         layer, conf, _ = layer_of(m)
         entry["layers"][layer] += 1
         entry["loc"] += m["attrs"].get("loc") or 0
-        entry["symbols"] += len(s.edges(src=mid, types=["defines"]))
+        entry["symbols"] += defines.get(mid, 0)
         entry["test"] = entry["test"] and bool(m["attrs"].get("test"))
 
     # Subsystem dependency edges aggregated from module imports.
     sub_deps: dict[tuple[str, str], int] = Counter()
     layer_edges: list[dict[str, Any]] = []
     violations = []
-    for e in s.edges(types=["imports"]):
-        a, b = modules.get(e["src"]), modules.get(e["dst"])
+    for src, dst, file, line in s.conn.execute("SELECT src, dst, file, line FROM edges WHERE type='imports' "
+                                               "ORDER BY id"):
+        e = {"file": file, "line": line}
+        a, b = modules.get(src), modules.get(dst)
         if not a or not b:
             continue
         sa, sb = subsystem_of(a["file"]), subsystem_of(b["file"])
@@ -467,7 +489,12 @@ def patterns(ctx: Ctx) -> dict[str, Any]:
             "intent": "unknown — code demonstrates structure, not why it was chosen",
         })
     composition_roots = []
-    for f in s.nodes("function"):
+    # Only functions that instantiate two or more components can qualify: find them with one grouped query
+    # instead of one query per function (a kernel has 750k functions).
+    wiring = [r[0] for r in s.conn.execute(
+        "SELECT e.src FROM edges e JOIN nodes n ON n.id = e.src WHERE e.type='instantiates' AND n.kind='function' "
+        "GROUP BY e.src HAVING COUNT(DISTINCT e.dst) >= 2 ORDER BY e.src")]
+    for f in filter(None, (s.node(fid) for fid in wiring)):
         inst = {e["dst"] for e in s.edges(src=f["id"], types=["instantiates"])}
         if len(inst) >= 2 and not f["attrs"].get("test"):
             composition_roots.append(claim(
@@ -559,26 +586,35 @@ def risks(ctx: Ctx) -> dict[str, Any]:
     """Risk register. Scores are a static, explainable weighting of structural signals."""
     s = ctx.store
     churn = gitutil.file_churn(ctx.ws.root)
-    tested = {e["dst"] for e in s.edges(types=["verifies"])}
-    items = []
-    for n in s.nodes(where="kind IN ('function','method','class')"):
-        if n["attrs"].get("test") or (n["file"] and ("test" in n["file"].split("/")[0])):
-            continue
-        fan_in = len({e["src"] for e in s.edges(dst=n["id"], types=["calls", "instantiates", "depends_on",
-                                                                      "inherits", "routes_to"])})
-        complexity = n["attrs"].get("complexity") or 1
-        writes = bool(s.edges(src=n["id"], types=["writes"]))
-        untested = n["id"] not in tested and not any(t.startswith(n["id"] + ".") for t in tested)
-        score = 0.25 * min(fan_in / 5, 1) + 0.2 * min(complexity / 15, 1) + 0.25 * untested + 0.15 * writes + \
-            0.15 * min(churn.get(n["file"] or "", 0) / 10, 1)
-        if score >= 0.4:
-            reasons = [r for r, on in (("high fan-in", fan_in >= 3), ("complex", complexity >= 10),
-                                       ("no test reaches it", untested), ("writes external state", writes),
-                                       ("frequently changed", churn.get(n["file"] or "", 0) >= 5)) if on]
-            items.append({"symbol": n["qualname"], "location": loc(n), "score": round(score, 3), "reasons": reasons,
-                          "fan_in": fan_in, "complexity": complexity, "evidence": ev.HEURISTIC,
-                          "evidence_class": "inferred", "method": "static weighted risk score"})
-    items.sort(key=lambda i: -i["score"])
+    tested = {r[0] for r in s.conn.execute("SELECT DISTINCT dst FROM edges WHERE type='verifies'")}
+    # "A test reaches it" also counts tests of its members (`Cls.method` tested -> `Cls` reached): every dotted
+    # prefix of a tested id, precomputed so the check is a set lookup, not a scan of `tested` per symbol.
+    reached = {t[:i] for t in tested for i, ch in enumerate(t) if ch == "."}
+    fan_ins = dict(s.conn.execute(
+        "SELECT dst, COUNT(DISTINCT src) FROM edges WHERE type IN ('calls','instantiates','depends_on','inherits',"
+        "'routes_to') GROUP BY dst"))
+    writers = {r[0] for r in s.conn.execute("SELECT DISTINCT src FROM edges WHERE type='writes'")}
+
+    def scored() -> Any:
+        for n in _symbols_by_id(s):
+            if n["test"] or (n["file"] and ("test" in n["file"].split("/")[0])):
+                continue
+            fan_in = fan_ins.get(n["id"], 0)
+            complexity = n["complexity"] or 1
+            writes = n["id"] in writers
+            untested = n["id"] not in tested and n["id"] not in reached
+            score = 0.25 * min(fan_in / 5, 1) + 0.2 * min(complexity / 15, 1) + 0.25 * untested + 0.15 * writes + \
+                0.15 * min(churn.get(n["file"] or "", 0) / 10, 1)
+            if score >= 0.4:
+                reasons = [r for r, on in (("high fan-in", fan_in >= 3), ("complex", complexity >= 10),
+                                           ("no test reaches it", untested), ("writes external state", writes),
+                                           ("frequently changed", churn.get(n["file"] or "", 0) >= 5)) if on]
+                yield {"symbol": n["qualname"], "location": loc(n), "score": round(score, 3), "reasons": reasons,
+                       "fan_in": fan_in, "complexity": complexity, "evidence": ev.HEURISTIC,
+                       "evidence_class": "inferred", "method": "static weighted risk score"}
+
+    # The 30 highest scores, ties in id order: what sorting every item would give, in constant memory.
+    items = heapq.nsmallest(30, scored(), key=lambda i: -i["score"])
     arch = ctx.cache.get("architecture") or {}
     structural = []
     for cyc in arch.get("dependency_cycles", []):

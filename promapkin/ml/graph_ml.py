@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
-from typing import Any
+from typing import Any, Iterable
 
 from promapkin import evidence as ev
 from promapkin.ml.embedders import _np, normalize, pack, top_k, unpack
@@ -28,46 +28,195 @@ def graph_model_name(base: str) -> str:
     return f"graph:{base}"
 
 
+PYTHON_MAX_NODES = 60_000      # without numpy, larger graphs skip propagation and vector similarity
+EXACT_MAX_NODES = 20_000       # above this, similarity search uses locality-sensitive hashing
+BLOCK_FLOATS = 16_000_000      # ~64 MB of float32 per block of work
+RAM_STATE_BYTES = 512 << 20    # propagation state kept in float32 up to this size, float16 above
+
+
 def propagate(store: Store, base_model: str, alpha: float = 0.5, iterations: int = 2) -> int:
-    """h_{t+1} = normalize((1-alpha) * h_0 + alpha * mean(h_t over neighbours)). Stored as graph:<model>."""
-    base = {nid: unpack(v) for nid, v in store.embeddings(base_model)}
-    if not base:
-        return 0
-    adj: dict[str, set[str]] = defaultdict(set)
-    for e in store.edges(types=STRUCTURAL_EDGES):
-        if e["src"] in base and e["dst"] in base:
-            adj[e["src"]].add(e["dst"])
-            adj[e["dst"]].add(e["src"])
-    if _np is not None:
-        h = _propagate_numpy(base, adj, alpha, iterations)
-    else:
-        h = _propagate_python(base, adj, alpha, iterations)
+    """h_{t+1} = normalize((1-alpha) * h_0 + alpha * mean(h_t over neighbours)). Stored as graph:<model>.
+
+    With numpy the matrices live in temporary files and are processed in row blocks, so memory does not grow
+    with the repository (the Linux kernel has about a million embedded symbols)."""
     name = graph_model_name(base_model)
-    store.conn.execute("DELETE FROM embeddings WHERE model=?", (name,))
-    store.conn.executemany("INSERT OR REPLACE INTO embeddings(id, model, sha, vec) VALUES (?,?,?,?)",
-                           ((nid, name, "propagated", vec.astype("float32").tobytes() if hasattr(vec, "astype")
-                             else pack(vec)) for nid, vec in h.items()))
-    return len(h)
+    if _np is None:
+        n = store.conn.execute("SELECT count(*) FROM embeddings WHERE model=?", (base_model,)).fetchone()[0]
+        if n > PYTHON_MAX_NODES:
+            raise RuntimeError(f"{n} embedded nodes: graph propagation at this size needs numpy "
+                               "(pip install numpy)")
+        base = {nid: unpack(v) for nid, v in store.embeddings(base_model)}
+        if not base:
+            return 0
+        adj: dict[str, set[str]] = defaultdict(set)
+        for src, dst in _structural_pairs(store):
+            if src in base and dst in base:
+                adj[src].add(dst)
+                adj[dst].add(src)
+        h = _propagate_python(base, adj, alpha, iterations)
+        store.conn.execute("DELETE FROM embeddings WHERE model=?", (name,))
+        store.conn.executemany("INSERT OR REPLACE INTO embeddings(id, model, sha, vec) VALUES (?,?,?,?)",
+                               ((nid, name, "propagated", pack(vec)) for nid, vec in h.items()))
+        return len(h)
+    with Matrix(store, base_model) as m:
+        if not m.ids:
+            store.conn.execute("DELETE FROM embeddings WHERE model=?", (name,))
+            return 0
+        indptr, indices = _csr(store, m.index)
+        n, dim = len(m.ids), m.dim
+        h0 = m.vecs
+        # Neighbours are read at random, so the current state lives in memory: float32 while that is small (exact
+        # results), float16 for kernel-sized graphs (half the memory; aggregation still runs in float32). The
+        # inputs and outputs are streamed through the memory-mapped files block by block.
+        cur = m.in_memory()
+        nxt = m.scratch()
+        for it in range(iterations):
+            for a, b in _row_blocks(indptr, dim):
+                lo, hi = indptr[a], indptr[b]
+                deg = _np.diff(indptr[a:b + 1]).astype(_np.float32)
+                mixed = _np.array(h0[a:b], dtype=_np.float32)
+                _drop(h0, a, b)
+                has = deg > 0
+                if hi > lo:
+                    gathered = cur[indices[lo:hi]].astype(_np.float32, copy=False)
+                    starts = (indptr[a:b][has] - lo)
+                    agg = _np.add.reduceat(gathered, starts, axis=0)
+                    mixed[has] = (1 - alpha) * mixed[has] + alpha * agg / deg[has, None]
+                norms = _np.linalg.norm(mixed, axis=1, keepdims=True)
+                nxt[a:b] = mixed / _np.where(norms == 0, 1, norms)
+                _drop(nxt, a, b)
+            if it < iterations - 1:
+                for a in range(0, n, 20000):
+                    cur[a:a + 20000] = nxt[a:a + 20000]
+                    _drop(nxt, a, a + 20000)
+        del cur
+        store.conn.execute("DELETE FROM embeddings WHERE model=?", (name,))
+        for a in range(0, n, 5000):
+            block = _np.asarray(nxt[a:a + 5000], dtype=_np.float32)
+            _drop(nxt, a, a + 5000)
+            store.conn.executemany("INSERT OR REPLACE INTO embeddings(id, model, sha, vec) VALUES (?,?,?,?)",
+                                   ((m.ids[a + i], name, "propagated", block[i].tobytes())
+                                    for i in range(block.shape[0])))
+        return n
 
 
-def _propagate_numpy(base: dict[str, list[float]], adj: dict[str, set[str]], alpha: float, iterations: int
-                     ) -> dict[str, Any]:
-    ids = list(base)
-    index = {nid: i for i, nid in enumerate(ids)}
-    h0 = _np.asarray([base[i] for i in ids], dtype=_np.float32)
-    src = _np.fromiter((index[a] for a, bs in adj.items() for _ in bs), dtype=_np.int64)
-    dst = _np.fromiter((index[b] for a, bs in adj.items() for b in bs), dtype=_np.int64)
-    deg = _np.bincount(src, minlength=len(ids)).astype(_np.float32)
-    h = h0
-    for _ in range(iterations):
-        agg = _np.zeros_like(h0)
-        _np.add.at(agg, src, h[dst])
-        has = deg > 0
-        mixed = h0.copy()
-        mixed[has] = (1 - alpha) * h0[has] + alpha * agg[has] / deg[has, None]
-        norms = _np.linalg.norm(mixed, axis=1, keepdims=True)
-        h = mixed / _np.where(norms == 0, 1, norms)
-    return {nid: h[i] for i, nid in enumerate(ids)}
+class Matrix:
+    """The embeddings of one model as a float32 matrix in a temporary file (numpy memmap): passes over millions
+    of vectors keep only the ids in memory. `keep` restricts it to a set of node ids."""
+
+    def __init__(self, store: Store, model: str, keep: Any = None):
+        import tempfile
+        self._dir = tempfile.TemporaryDirectory(prefix="vectors-", dir=_tmp_root(store))
+        self.ids: list[str] = []
+        self.index: dict[str, int] = {}
+        self.dim = 0
+        self.vecs: Any = None
+        self._n = 0
+        total = store.conn.execute("SELECT count(*) FROM embeddings e JOIN nodes n ON n.id=e.id WHERE e.model=?",
+                                   (model,)).fetchone()[0]
+        if not total:
+            return
+        rows = store.conn.execute("SELECT e.id, e.vec FROM embeddings e JOIN nodes n ON n.id=e.id WHERE e.model=? "
+                                  "ORDER BY e.id", (model,))
+        for nid, blob in rows:
+            if keep is not None and nid not in keep:
+                continue
+            if self.vecs is None:
+                self.dim = len(blob) // 4
+                self.vecs = self._file("vecs", total)
+            if len(blob) != self.dim * 4:
+                continue      # a vector from another dimension (stale model change): skip it
+            self.vecs[len(self.ids)] = _np.frombuffer(blob, dtype=_np.float32)
+            self.index[nid] = len(self.ids)
+            self.ids.append(nid)
+            if len(self.ids) % 20000 == 0:
+                _drop(self.vecs, len(self.ids) - 20000, len(self.ids))
+        if self.vecs is not None:
+            self.vecs = self.vecs[:len(self.ids)]
+
+    def _file(self, name: str, rows: int) -> Any:
+        self._n += 1
+        return _np.memmap(f"{self._dir.name}/{name}-{self._n}.f32", mode="w+", dtype=_np.float32,
+                          shape=(max(rows, 1), self.dim))
+
+    def in_memory(self) -> Any:
+        """The matrix as an in-memory array for random access: float32 up to RAM_STATE_BYTES, else float16."""
+        n = len(self.ids)
+        out = _np.empty((n, self.dim), dtype=_np.float32 if n * self.dim * 4 <= RAM_STATE_BYTES else _np.float16)
+        for a in range(0, n, 20000):
+            out[a:a + 20000] = self.vecs[a:a + 20000]
+            _drop(self.vecs, a, a + 20000)
+        return out
+
+    def scratch(self) -> Any:
+        return self._file("scratch", len(self.ids))[:len(self.ids)]
+
+    def __enter__(self) -> "Matrix":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.vecs = None
+        self._dir.cleanup()
+
+
+def _drop(arr: Any, a: int, b: int) -> None:
+    """Release rows a..b of a memory-mapped matrix from this process (written data stays in the file and the
+    page cache): a sequential pass over a 2 GB file then never holds more than one block resident."""
+    import mmap
+    mm = getattr(arr, "_mmap", None)
+    if mm is None or not hasattr(mm, "madvise"):
+        return
+    row = arr.shape[1] * arr.itemsize
+    base = getattr(arr, "offset", 0) or 0
+    start = -(-(base + a * row) // mmap.PAGESIZE) * mmap.PAGESIZE
+    end = (base + min(b, arr.shape[0]) * row) // mmap.PAGESIZE * mmap.PAGESIZE
+    if end > start:
+        try:
+            mm.madvise(mmap.MADV_DONTNEED, start, end - start)
+        except (OSError, ValueError, AttributeError):
+            pass
+
+
+def _tmp_root(store: Store) -> str | None:
+    from pathlib import Path
+    parent = Path(store.path).parent
+    return str(parent) if store.path != ":memory:" and parent.is_dir() else None
+
+
+def _structural_pairs(store: Store) -> Any:
+    marks = ",".join("?" * len(STRUCTURAL_EDGES))
+    return store.conn.execute(f"SELECT src, dst FROM edges WHERE type IN ({marks})", STRUCTURAL_EDGES)
+
+
+def _csr(store: Store, index: dict[str, int]) -> tuple[Any, Any]:
+    """Undirected, de-duplicated adjacency of the structural edges as CSR arrays (indptr, indices)."""
+    from array import array
+    a, b = array("q"), array("q")
+    for src, dst in _structural_pairs(store):
+        i, j = index.get(src), index.get(dst)
+        if i is not None and j is not None and i != j:
+            a.append(i)
+            b.append(j)
+    n = len(index)
+    src = _np.frombuffer(a, dtype=_np.int64) if a else _np.zeros(0, dtype=_np.int64)
+    dst = _np.frombuffer(b, dtype=_np.int64) if b else _np.zeros(0, dtype=_np.int64)
+    keys = _np.unique(_np.concatenate([src * n + dst, dst * n + src]))
+    rows, cols = keys // n, (keys % n).astype(_np.int32)
+    indptr = _np.zeros(n + 1, dtype=_np.int64)
+    _np.cumsum(_np.bincount(rows, minlength=n), out=indptr[1:])
+    return indptr, cols
+
+
+def _row_blocks(indptr: Any, dim: int) -> Any:
+    """Row ranges whose gathered neighbour vectors stay within BLOCK_FLOATS."""
+    n = len(indptr) - 1
+    budget = max(1, BLOCK_FLOATS // max(dim, 1))
+    a = 0
+    while a < n:
+        b = int(_np.searchsorted(indptr, indptr[a] + budget, side="right")) - 1
+        b = min(n, max(b, a + 1), a + budget)
+        yield a, b
+        a = b
 
 
 def _propagate_python(base: dict[str, list[float]], adj: dict[str, set[str]], alpha: float, iterations: int
@@ -96,41 +245,50 @@ def similarity_edges(store: Store, model: str | None, k: int = 3, threshold: flo
                      revision: str | None = None) -> int:
     """`similar_to` edges between semantically related symbols in different modules.
 
-    ML: cosine similarity of graph embeddings (evidence ml_classifier, confidence = similarity).
+    ML: cosine similarity of graph embeddings (evidence ml_classifier, confidence = similarity); exact top-k up to
+    EXACT_MAX_NODES symbols, locality-sensitive hashing above.
     Heuristic: identifier-token Jaccard overlap (evidence heuristic, static confidence)."""
     store.delete_edges("type='similar_to'")
     kinds = ",".join(f"'{x}'" for x in SIMILAR_KINDS)
-    nodes = {n["id"]: n for n in store.nodes(where=f"kind IN ({kinds}) AND json_extract(attrs, '$.test') IS NOT 1")
-             if not (n["kind"] == "module" and (n["attrs"].get("loc") or 0) < 5)}
+    nodes = {nid: (kind, name) for nid, kind, name in store.conn.execute(
+        f"SELECT id, kind, name FROM nodes WHERE kind IN ({kinds}) AND json_extract(attrs, '$.test') IS NOT 1 "
+        f"AND NOT (kind = 'module' AND COALESCE(json_extract(attrs, '$.loc'), 0) < 5) ORDER BY id")}
     count = 0
-    seen: set[tuple[str, str]] = set()
     if model:
-        items = [(nid, v) for nid, v in store.embeddings(model) if nid in nodes]
-        for nid, neighbours in _all_top_k(items, k + 1):
-            for other, sim in neighbours:
-                if other == nid or sim < threshold or _same_module(nid, other) or \
-                        nodes[nid]["kind"] != nodes[other]["kind"]:
-                    continue
-                key = tuple(sorted((nid, other)))
-                if key in seen:
-                    continue
-                seen.add(key)
-                store.add_edge(key[0], key[1], "similar_to", evidence=ev.ML_CLASSIFIER, confidence=round(sim, 3),
-                               revision=revision, attrs={"method": f"cosine({model})", "similarity": round(sim, 3)})
-                count += 1
+        if _np is None:
+            if len(nodes) > PYTHON_MAX_NODES:
+                raise RuntimeError(f"{len(nodes)} symbols: similarity search at this size needs numpy "
+                                   "(pip install numpy)")
+            items = [(nid, v) for nid, v in store.embeddings(model) if nid in nodes]
+            pairs = _pairs_python(items, k + 1)
+        else:
+            with Matrix(store, model, keep=nodes) as m:
+                ids = m.ids
+                nbr_idx, nbr_sim = _neighbours(m, k + 1)
+            pairs = _pairs(ids, nbr_idx, nbr_sim)
+        for nid, other, sim in pairs:
+            if sim < threshold or _same_module(nid, other) or nodes[nid][0] != nodes[other][0]:
+                continue
+            a, b = sorted((nid, other))
+            store.add_edge(a, b, "similar_to", evidence=ev.ML_CLASSIFIER, confidence=round(sim, 3),
+                           revision=revision, attrs={"method": f"cosine({model})", "similarity": round(sim, 3)})
+            count += 1
         return count
-    tokens = {nid: set(split_identifier(n["name"])) - {"get", "set", "init", "self"} for nid, n in nodes.items()}
+    tokens = {nid: set(split_identifier(name)) - {"get", "set", "init", "self"} for nid, (_k, name) in nodes.items()}
     by_token: dict[str, list[str]] = defaultdict(list)
     for nid, toks in tokens.items():
         for t in toks:
             by_token[t].append(nid)
+    # A token shared by thousands of names (`free`, `alloc` in a kernel) says nothing and makes this quadratic.
+    common = {t for t, ids in by_token.items() if len(ids) > 5000}
+    seen: set[tuple[str, str]] = set()
     for nid, toks in tokens.items():
         if len(toks) < 2:
             continue
-        cands = Counter(o for t in toks for o in by_token[t] if o != nid)
+        cands = Counter(o for t in toks - common for o in by_token[t] if o != nid)
         for other, shared in cands.most_common(k):
             union = len(toks | tokens[other])
-            if shared / union < 0.6 or _same_module(nid, other) or nodes[nid]["kind"] != nodes[other]["kind"]:
+            if shared / union < 0.6 or _same_module(nid, other) or nodes[nid][0] != nodes[other][0]:
                 continue
             key = tuple(sorted((nid, other)))
             if key in seen:
@@ -143,23 +301,115 @@ def similarity_edges(store: Store, model: str | None, k: int = 3, threshold: flo
     return count
 
 
-def _all_top_k(items: list[tuple[str, bytes]], k: int) -> list[tuple[str, list[tuple[str, float]]]]:
-    """Top-k cosine neighbours for every item: one blocked matrix product with numpy, else pairwise."""
-    if not items:
-        return []
-    if _np is None:
-        return [(nid, top_k(unpack(blob), items, k)) for nid, blob in items]
-    ids = [i for i, _ in items]
-    mat = _np.frombuffer(b"".join(v for _, v in items), dtype=_np.float32).reshape(len(items), -1)
-    out = []
-    kk = min(k, len(ids))
-    for start in range(0, len(ids), 1024):
-        block = mat[start:start + 1024] @ mat.T
+def _pairs(ids: list[str], nbr_idx: Any, nbr_sim: Any) -> Any:
+    """Each unordered neighbour pair once: (i, j) is reported from row i unless row j lists i too and j < i."""
+    for i in range(len(ids)):
+        for j, sim in zip(nbr_idx[i].tolist(), nbr_sim[i].tolist()):
+            if j < 0 or j == i:
+                continue
+            if j < i and i in nbr_idx[j]:
+                continue
+            yield ids[i], ids[j], sim
+
+
+def _pairs_python(items: list[tuple[str, bytes]], k: int) -> Any:
+    seen: set[tuple[str, str]] = set()
+    for nid, blob in items:
+        for other, sim in top_k(unpack(blob), items, k):
+            if other == nid:
+                continue
+            key = (min(nid, other), max(nid, other))
+            if key not in seen:
+                seen.add(key)
+                yield nid, other, sim
+
+
+def _neighbours(m: Matrix, k: int) -> tuple[Any, Any]:
+    """(indices, similarities) of each row's top-k cosine neighbours (self included), -1 where fewer exist."""
+    n = len(m.ids)
+    if n == 0:
+        return _np.zeros((0, k), dtype=_np.int64), _np.zeros((0, k), dtype=_np.float32)
+    if n <= EXACT_MAX_NODES:
+        return _exact_top_k(m.in_memory(), k)
+    return _lsh_top_k(m.in_memory(), k)
+
+
+def _exact_top_k(mat: Any, k: int) -> tuple[Any, Any]:
+    n = mat.shape[0]
+    kk = min(k, n)
+    idx = _np.full((n, k), -1, dtype=_np.int64)
+    sim = _np.full((n, k), -_np.inf, dtype=_np.float32)
+    full = _np.asarray(mat, dtype=_np.float32)
+    step = max(1, BLOCK_FLOATS // n)
+    for start in range(0, n, step):
+        block = full[start:start + step] @ full.T
         part = _np.argpartition(-block, kk - 1, axis=1)[:, :kk]
-        for r in range(block.shape[0]):
-            cols = part[r][_np.argsort(-block[r, part[r]])]
-            out.append((ids[start + r], [(ids[c], float(block[r, c])) for c in cols]))
-    return out
+        vals = _np.take_along_axis(block, part, axis=1)
+        order = _np.argsort(-vals, axis=1, kind="stable")
+        idx[start:start + block.shape[0], :kk] = _np.take_along_axis(part, order, axis=1)
+        sim[start:start + block.shape[0], :kk] = _np.take_along_axis(vals, order, axis=1)
+    return idx, sim
+
+
+LSH_TABLES = 12
+LSH_WINDOW = 256
+LSH_BITS = 20
+
+
+def _lsh_top_k(mat: Any, k: int, tables: int | None = None, window: int | None = None) -> tuple[Any, Any]:
+    """Approximate top-k by random-hyperplane hashing. In each of `tables` tables the vectors are sorted by their
+    hash code and compared exactly within half-overlapping windows of the sorted order, so near neighbours (long
+    shared code prefixes) meet even when their codes differ in a low bit. Windows that do not overlap are
+    compared in one batched matrix product. Deterministic (fixed seed); time and memory are linear in the
+    number of vectors."""
+    tables, window = tables or LSH_TABLES, window or LSH_WINDOW
+    n, dim = mat.shape
+    window = min(window, n)
+    rng = _np.random.default_rng(20240607)
+    best_idx = _np.full((n, k), -1, dtype=_np.int64)
+    best_sim = _np.full((n, k), -_np.inf, dtype=_np.float32)
+    weights = (1 << _np.arange(LSH_BITS - 1, -1, -1, dtype=_np.int64))
+    rows_per_block = max(1, BLOCK_FLOATS // dim)
+    group = max(1, BLOCK_FLOATS // (window * dim))       # windows per batched product
+    for _t in range(tables):
+        planes = rng.standard_normal((dim, LSH_BITS)).astype(_np.float32)
+        codes = _np.empty(n, dtype=_np.int64)
+        for a in range(0, n, rows_per_block):
+            codes[a:a + rows_per_block] = ((_np.asarray(mat[a:a + rows_per_block]) @ planes) > 0).astype(
+                _np.int64) @ weights
+        order = _np.argsort(codes, kind="stable")
+        for offset in (0, window // 2):
+            full = (n - offset) // window
+            for g in range(0, full, group):
+                ids = order[offset + g * window: offset + min(full, g + group) * window].reshape(-1, window)
+                v = mat[ids.ravel()].astype(_np.float32, copy=False).reshape(ids.shape[0], window, dim)
+                _merge_rows(best_idx, best_sim, ids, v @ v.transpose(0, 2, 1), k)
+            tail = order[offset + full * window:] if offset == 0 else order[:offset]
+            if len(tail) > 1:
+                tail = _np.sort(tail)
+                v = mat[tail].astype(_np.float32, copy=False)
+                _merge_rows(best_idx, best_sim, tail[None, :], (v @ v.T)[None], k)
+    return best_idx, best_sim
+
+
+def _merge_rows(best_idx: Any, best_sim: Any, ids: Any, sims: Any, k: int) -> None:
+    """Fold each window's exact top-k (ids: windows x members, sims: windows x members x members) into the
+    running per-row top-k. A row appears at most once per call."""
+    w, b = ids.shape
+    kk = min(k, b)
+    part = _np.argpartition(-sims, kk - 1, axis=2)[:, :, :kk]
+    cand_sim = _np.take_along_axis(sims, part, axis=2).reshape(w * b, kk)
+    cand_idx = _np.take_along_axis(_np.broadcast_to(ids[:, None, :], (w, b, b)), part, axis=2).reshape(w * b, kk)
+    rows = ids.reshape(-1)
+    cur_idx, cur_sim = best_idx[rows], best_sim[rows]
+    dup = (cand_idx[:, :, None] == cur_idx[:, None, :]).any(axis=2)
+    cand_sim = _np.where(dup, -_np.inf, cand_sim)
+    all_idx = _np.concatenate([cur_idx, cand_idx], axis=1)
+    all_sim = _np.concatenate([cur_sim, cand_sim], axis=1)
+    top = _np.argsort(-all_sim, axis=1, kind="stable")[:, :k]
+    new_sim = _np.take_along_axis(all_sim, top, axis=1)
+    best_sim[rows] = new_sim
+    best_idx[rows] = _np.where(_np.isneginf(new_sim), -1, _np.take_along_axis(all_idx, top, axis=1))
 
 
 def _same_module(a: str, b: str) -> bool:
@@ -170,13 +420,36 @@ def _same_module(a: str, b: str) -> bool:
         ma.startswith(mb + "/") or mb.startswith(ma + "/")
 
 
-def disambiguate(store: Store, ambiguous: list[dict[str, Any]], model: str | None, revision: str | None) -> int:
+def disambiguate(store: Store, ambiguous: Iterable[dict[str, Any]], model: str | None, revision: str | None) -> int:
     """Resolve references whose name matched several symbols.
 
     ML: pick the candidate closest to the caller in graph-embedding space when the margin is clear.
     Heuristic: pick the only candidate whose module the caller's module imports (static confidence)."""
-    vecs = {nid: unpack(v) for nid, v in store.embeddings(model)} if model else {}
+    import itertools
     imports_of: dict[str, set[str]] = {}
+    resolved = 0
+    refs = iter(ambiguous)      # a list, or the scanner's disk-backed list: read in batches either way
+    while batch := list(itertools.islice(refs, 500)):
+        vecs = _vectors(store, model, {i for a in batch for i in [a["src"], *a["candidates"]]}) if model else {}
+        resolved += _disambiguate_batch(store, batch, vecs, imports_of, revision)
+    return resolved
+
+
+def _vectors(store: Store, model: str, ids: set[str]) -> dict[str, list[float]]:
+    """Just the vectors a batch needs: never the whole model (a million vectors in a kernel-sized index)."""
+    out: dict[str, list[float]] = {}
+    ordered = sorted(ids)
+    for i in range(0, len(ordered), 500):
+        chunk = ordered[i:i + 500]
+        marks = ",".join("?" * len(chunk))
+        for nid, blob in store.conn.execute(f"SELECT id, vec FROM embeddings WHERE model=? AND id IN ({marks})",
+                                            [model, *chunk]):
+            out[nid] = unpack(blob)
+    return out
+
+
+def _disambiguate_batch(store: Store, ambiguous: list[dict[str, Any]], vecs: dict[str, list[float]],
+                        imports_of: dict[str, set[str]], revision: str | None) -> int:
     resolved = 0
     for amb in ambiguous:
         src = amb["src"]
@@ -232,12 +505,19 @@ def cluster_modules(store: Store, model: str | None, min_similarity: float = 0.6
         if e["src"] in mods and e["dst"] in mods:
             weights[e["src"]][e["dst"]] = weights[e["src"]].get(e["dst"], 0) + 1.0
             weights[e["dst"]][e["src"]] = weights[e["dst"]].get(e["src"], 0) + 1.0
-    items = [(nid, v) for nid, v in store.embeddings(model) if nid in mods]
-    for nid, blob in items:
-        for other, sim in top_k(unpack(blob), items, 4):
-            if other != nid and sim >= min_similarity:
-                weights[nid][other] = weights[nid].get(other, 0) + sim
-                weights[other][nid] = weights[other].get(nid, 0) + sim
+    if _np is None:
+        items = [(nid, v) for nid, v in store.embeddings(model) if nid in mods]
+        neighbours = ((nid, other, sim) for nid, blob in items for other, sim in top_k(unpack(blob), items, 4))
+    else:
+        with Matrix(store, model, keep=mods) as m:
+            ids = m.ids
+            nbr_idx, nbr_sim = _neighbours(m, 4)
+        neighbours = ((ids[i], ids[j], s) for i in range(len(ids))
+                      for j, s in zip(nbr_idx[i].tolist(), nbr_sim[i].tolist()) if j >= 0)
+    for nid, other, sim in neighbours:
+        if other != nid and sim >= min_similarity:
+            weights[nid][other] = weights[nid].get(other, 0) + sim
+            weights[other][nid] = weights[other].get(nid, 0) + sim
     label = {m: m for m in mods}
     order = sorted(mods)
     for _ in range(10):

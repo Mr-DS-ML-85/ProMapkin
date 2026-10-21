@@ -139,12 +139,12 @@ class Retriever:
             add("doc_bridge", sorted(bridged.items(), key=lambda t: -t[1]))
         # 3. semantic (ML tier only)
         if self.ml:
-            from promapkin.ml.embedders import top_k
+            from promapkin.ml.embedders import store_top_k
             emb = self.rt.embedder
             qv = emb.embed([query])[0]
-            add("semantic", [(i, s) for i, s in top_k(qv, self.store.embeddings(emb.name), 60) if s > 0.15])
+            add("semantic", [(i, s) for i, s in store_top_k(self.store, emb.name, qv, 60) if s > 0.15])
             from promapkin.ml.graph_ml import graph_model_name
-            add("graph_semantic", [(i, s) for i, s in top_k(qv, self.store.embeddings(graph_model_name(emb.name)), 40)
+            add("graph_semantic", [(i, s) for i, s in store_top_k(self.store, graph_model_name(emb.name), qv, 40)
                                    if s > 0.2])
         # Neural embeddings carry real semantics; the built-in hashing embedder is mostly lexical, so it only
         # nudges the ranking (measured on examples/bench: full weight hurt MRR).

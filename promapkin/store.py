@@ -339,6 +339,21 @@ class Store:
         sql += " ORDER BY id"
         return [_node(r) for r in self.conn.execute(sql, args)]
 
+    def iter_nodes(self, where: str = "", params: Iterable[Any] = (), page: int = 5000) -> Iterator[dict[str, Any]]:
+        """Like nodes(), one page at a time (in rowid order), for passes over every node of a large index."""
+        cond = f" AND ({where})" if where else ""
+        last = 0
+        while True:
+            rows = self.conn.execute(f"SELECT rowid AS _rowid, * FROM nodes WHERE rowid > ?{cond} ORDER BY rowid "
+                                     f"LIMIT ?", [last, *params, page]).fetchall()
+            if not rows:
+                return
+            last = rows[-1]["_rowid"]
+            for r in rows:
+                d = _node(r)
+                del d["_rowid"]
+                yield d
+
     def find_nodes_by_name(self, name: str, kinds: Iterable[str] | None = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM nodes WHERE (name=? OR qualname=? OR id=?)"
         args: list[Any] = [name, name, name]
@@ -418,6 +433,32 @@ class Store:
             "INSERT INTO refs(owner_file, src, target, type, line, context) VALUES (?,?,?,?,?,?)",
             (owner_file, src, target, type, line, json.dumps(context or {}, sort_keys=True)),
         )
+
+    def iter_refs(self, files: Iterable[str] | None = None, where: str = "", params: Iterable[Any] = (),
+                  page: int = 20000) -> Iterator[dict[str, Any]]:
+        """Like refs(), one page at a time: memory stays flat for repositories with millions of references."""
+        cond = f" AND ({where})" if where else ""
+        if files is None:
+            last = 0
+            while True:
+                rows = self.conn.execute(f"SELECT rowid, * FROM refs WHERE rowid > ?{cond} ORDER BY rowid LIMIT ?",
+                                         [last, *params, page]).fetchall()
+                if not rows:
+                    return
+                last = rows[-1][0]
+                for r in rows:
+                    d = dict(r)
+                    del d["rowid"]
+                    d["context"] = json.loads(d["context"])
+                    yield d
+        else:
+            for chunk in _chunks(sorted(files), 400):
+                marks = ",".join("?" * len(chunk))
+                for r in self.conn.execute(f"SELECT * FROM refs WHERE owner_file IN ({marks}){cond}",
+                                           [*chunk, *params]).fetchall():
+                    d = dict(r)
+                    d["context"] = json.loads(d["context"])
+                    yield d
 
     def refs(self, files: Iterable[str] | None = None) -> list[dict[str, Any]]:
         out = []

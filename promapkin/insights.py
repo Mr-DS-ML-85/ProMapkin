@@ -82,30 +82,41 @@ def surprises(store: Store, rt: Any = None, limit: int = 20) -> dict[str, Any]:
     member = {m: i for i, c in enumerate(comms) for m in c["modules"]}
     cache: dict[str, str | None] = {}
     tests = {n["id"] for n in store.nodes("module") if n["attrs"].get("test")}
-    between: dict[tuple[int, int], list[dict[str, Any]]] = defaultdict(list)
     marks = ",".join("?" * len(CODE_EDGES))
-    for e in store.edges(where=f"type IN ({marks})", params=CODE_EDGES):
-        if e["evidence"] not in TRUSTED or e["status"] != "verified":
+    fan_in: Counter[str] = Counter(dst for (dst,) in store.conn.execute(
+        f"SELECT dst FROM edges WHERE type IN ({marks})", CODE_EDGES))
+    # One pass, keeping per pair of communities only the edge count and the least expected edge (lowest target
+    # fan-in, first in id order): a kernel has millions of code edges.
+    between: dict[tuple[int, int], list[Any]] = {}
+    for src, dst, typ, evidence, status, file, line in store.conn.execute(
+            f"SELECT src, dst, type, evidence, status, file, line FROM edges WHERE type IN ({marks}) ORDER BY id",
+            CODE_EDGES):
+        if evidence not in TRUSTED or status != "verified":
             continue
-        a, b = _module_of(store, e["src"], cache), _module_of(store, e["dst"], cache)
+        a, b = _module_of(store, src, cache), _module_of(store, dst, cache)
         if not a or not b or a == b or a in tests or b in tests:
             continue
         ca, cb = member.get(a), member.get(b)
         if ca is None or cb is None or ca == cb:
             continue
-        between[(min(ca, cb), max(ca, cb))].append(e)
-    fan_in: Counter[str] = Counter(dst for (dst,) in store.conn.execute(
-        f"SELECT dst FROM edges WHERE type IN ({marks})", CODE_EDGES))
+        key = (min(ca, cb), max(ca, cb))
+        e = {"src": src, "dst": dst, "type": typ, "evidence": evidence, "file": file, "line": line}
+        slot = between.get(key)
+        if slot is None:
+            between[key] = [1, e]
+        else:
+            slot[0] += 1
+            if fan_in[dst] < fan_in[slot[1]["dst"]]:
+                slot[1] = e
     rows = []
-    for (ca, cb), es in between.items():
+    for (ca, cb), (count, e) in between.items():
         # The least expected link: few edges between the communities, and a target that is not a hub
         # everybody imports (a link to `fastapi` from a tutorial is not news).
-        e = min(es, key=lambda x: fan_in[x["dst"]])
         rows.append({"source": e["src"], "type": e["type"], "target": e["dst"], "evidence": e["evidence"],
                      "at": f"{e['file']}:{e['line']}" if e.get("file") else None,
                      "communities": [comms[ca]["component"], comms[cb]["component"]],
-                     "edges_between_communities": len(es), "target_fan_in": fan_in[e["dst"]],
-                     "why": f"only {len(es)} observed edge(s) connect these two communities"})
+                     "edges_between_communities": count, "target_fan_in": fan_in[e["dst"]],
+                     "why": f"only {count} observed edge(s) connect these two communities"})
     rows.sort(key=lambda r: (r["edges_between_communities"] * (1 + r["target_fan_in"]), r["source"]))
     return {"communities": len(comms), "connections": rows[:limit],
             "policy": "observed evidence only (AST, resolved imports, lexical, runtime); name matches, ML "
@@ -177,18 +188,18 @@ def semantic_surprises(store: Store, rt: Any = None, limit: int = 20) -> list[di
     member = {m: i for i, c in enumerate(comms) for m in c["modules"]}
     cache: dict[str, str | None] = {}
     marks = ",".join("?" * len(CODE_EDGES))
-    linked = {(a, b) for a, b in store.conn.execute(f"SELECT src, dst FROM edges WHERE type IN ({marks})",
-                                                     CODE_EDGES)}
+    linked_sql = (f"SELECT 1 FROM edges WHERE ((src=? AND dst=?) OR (src=? AND dst=?)) AND type IN ({marks}) "
+                  f"LIMIT 1")
     rows = []
     for e in store.edges(types=["similar_to"]):
         a, b = e["src"], e["dst"]
-        if (a, b) in linked or (b, a) in linked:
-            continue
         ma, mb = _module_of(store, a, cache), _module_of(store, b, cache)
         if not ma or not mb or ma == mb:
             continue
         ca, cb = member.get(ma), member.get(mb)
         if ca is None or cb is None or ca == cb:
+            continue
+        if store.conn.execute(linked_sql, (a, b, b, a, *CODE_EDGES)).fetchone():
             continue
         na, nb = store.node(a), store.node(b)
         if not na or not nb or na["attrs"].get("test") or nb["attrs"].get("test") or \
