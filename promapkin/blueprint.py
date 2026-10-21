@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 from typing import Any
 
@@ -416,12 +417,15 @@ def overview(ws: Workspace) -> dict[str, Any]:
         sections = bp["sections"]
         fresh = True
     else:
+        cached = ws.store.get_meta("ctx:overview")      # ctx:* keys are cleared by every scan
+        if cached:
+            return json.loads(cached)
         from promapkin.agents import orchestrator
         sections = orchestrator.run(ws, sections=["reconnaissance", "architecture"], provider=None)
         fresh = False
     arch = sections["architecture"]
     rec = sections.get("reconnaissance", {})
-    return {
+    out = {
         "repository": ws.root.name, "revision": rev, "blueprint_fresh": fresh,
         "languages": rec.get("languages"), "styles": arch["styles"],
         "subsystems": [{"name": s["name"], "layer": s["dominant_layer"], "modules": len(s["modules"]),
@@ -434,4 +438,18 @@ def overview(ws: Workspace) -> dict[str, Any]:
         "semantic_components": [{"component": c["component"], "modules": len(c["modules"]),
                                  "confidence": c["confidence"]} for c in arch.get("semantic_components", [])][:12],
     }
+    if not fresh:
+        # Computing this on a large repository takes a while (Linux: ~1M symbols); every brief and MCP overview
+        # until the next scan reuses it. Best effort: skipped if a writer holds the index.
+        from promapkin.store import StoreBusy
+        conn = ws.store.conn
+        conn.execute("PRAGMA busy_timeout=0")      # never wait for a running scan just to cache this
+        try:
+            with ws.store.transaction():
+                ws.store.set_meta("ctx:overview", json.dumps(out, default=str))
+        except (StoreBusy, sqlite3.OperationalError):
+            pass
+        finally:
+            conn.execute(f"PRAGMA busy_timeout={int(ws.store.busy_timeout * 1000)}")
+    return out
 

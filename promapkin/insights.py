@@ -131,19 +131,25 @@ def export_html(store: Store, out: Path, rt: Any = None, max_nodes: int = 1500, 
     member = {m: i for i, c in enumerate(comms) for m in c["modules"]}
     marks = ",".join("?" * len(HTML_EDGES))
     degree: Counter[str] = Counter()
-    edges = []
-    for e in store.edges(where=f"type IN ({marks})", params=HTML_EDGES):
-        degree[e["src"]] += 1
-        degree[e["dst"]] += 1
-        edges.append(e)
+    for src, dst in store.conn.execute(f"SELECT src, dst FROM edges WHERE type IN ({marks})", HTML_EDGES):
+        degree[src] += 1
+        degree[dst] += 1
     kinds = ",".join("?" * len(HTML_KINDS))
-    nodes = {r["id"]: r for r in store.nodes(where=f"kind IN ({kinds})", params=HTML_KINDS)}
+    kind_of = dict(store.conn.execute(f"SELECT id, kind FROM nodes WHERE kind IN ({kinds}) ORDER BY id",
+                                      HTML_KINDS))
     # Keep the most connected nodes, but never drop infrastructure/data nodes for code hubs: they are few and are
-    # what the code graph alone cannot show.
-    ranked = sorted((n for n in nodes if degree[n]), key=lambda n: (CATEGORY.get(nodes[n]["kind"]) == "code",
-                                                                    -degree[n]))
+    # what the code graph alone cannot show. Only the kept nodes and the edges among them are read in full.
+    ranked = sorted((n for n in kind_of if degree[n]), key=lambda n: (CATEGORY.get(kind_of[n]) == "code",
+                                                                      -degree[n]))
     keep = ranked[:max_nodes]
     keep_set = set(keep)
+    nodes = {nid: store.node(nid) for nid in keep}
+    edges = []
+    for i in range(0, len(keep), 400):
+        chunk = keep[i:i + 400]
+        edges += [e for e in store.edges(where=f"type IN ({marks}) AND src IN ({','.join('?' * len(chunk))})",
+                                         params=[*HTML_EDGES, *chunk]) if e["dst"] in keep_set]
+    edges.sort(key=lambda e: e["id"])
     cache: dict[str, str | None] = {}
     data_nodes = []
     for nid in keep:
@@ -170,7 +176,7 @@ def export_html(store: Store, out: Path, rt: Any = None, max_nodes: int = 1500, 
             hyper.append({"kind": h["kind"], "label": h["label"], "members": members, "weight": h.get("weight")})
     payload = {"nodes": data_nodes, "edges": data_edges, "hyper": hyper[:200],
                "groups": [c["component"] for c in comms], "title": title,
-               "truncated": len([n for n in nodes if degree[n]]) > len(data_nodes)}
+               "truncated": len(ranked) > len(data_nodes)}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(HTML_TEMPLATE.replace("__TITLE__", html.escape(title)).replace(
         "__DATA__", json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")))

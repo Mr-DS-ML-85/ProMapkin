@@ -24,14 +24,53 @@ except ModuleNotFoundError:  # pragma: no cover - depends on environment
 Vector = Sequence[float]
 
 
-def pack(vec: Vector) -> bytes:
+# Large indexes store vectors as float16 behind this header: half the disk and I/O (a kernel-sized index has two
+# million vectors), with cosine error around 1e-3. Plain float32 blobs (no header) remain the default and both
+# formats are read everywhere. As a float32 the header would be ~4e-38, a value no normalized vector holds.
+HALF_MAGIC = b"PMh\x01"
+COMPACT_MIN_VECTORS = 200_000
+
+
+def pack(vec: Vector, half: bool = False) -> bytes:
+    if half and _np is not None:
+        return HALF_MAGIC + _np.asarray(vec, dtype=_np.float16).tobytes()
     return array("f", vec).tobytes()
 
 
+def is_half(blob: bytes) -> bool:
+    return blob[:4] == HALF_MAGIC and len(blob) % 2 == 0
+
+
+def blob_dim(blob: bytes) -> int:
+    return (len(blob) - 4) // 2 if is_half(blob) else len(blob) // 4
+
+
 def unpack(blob: bytes) -> list[float]:
+    if is_half(blob):
+        if _np is not None:
+            return _np.frombuffer(blob, dtype=_np.float16, offset=4).astype(_np.float32).tolist()
+        import struct
+        return list(struct.unpack(f"={(len(blob) - 4) // 2}e", blob[4:]))
     a = array("f")
     a.frombytes(blob)
     return a.tolist()
+
+
+def decode(blob: bytes) -> Any:
+    """A stored vector as a float32 numpy array (numpy required)."""
+    if is_half(blob):
+        return _np.frombuffer(blob, dtype=_np.float16, offset=4).astype(_np.float32)
+    return _np.frombuffer(blob, dtype=_np.float32)
+
+
+def decode_many(blobs: list[bytes]) -> Any:
+    """Equal-dimension stored vectors as one float32 matrix (numpy required)."""
+    if blobs and not any(is_half(b) for b in blobs):
+        return _np.frombuffer(b"".join(blobs), dtype=_np.float32).reshape(len(blobs), -1)
+    if blobs and all(is_half(b) for b in blobs):
+        return _np.frombuffer(b"".join(b[4:] for b in blobs), dtype=_np.float16).reshape(len(blobs), -1).astype(
+            _np.float32)
+    return _np.stack([decode(b) for b in blobs]) if blobs else _np.zeros((0, 0), dtype=_np.float32)
 
 
 def normalize(vec: Iterable[float]) -> list[float]:
@@ -49,10 +88,11 @@ def top_k(query: Vector, items: list[tuple[str, bytes]], k: int) -> list[tuple[s
     if not items:
         return []
     if _np is not None:
-        mat = _np.frombuffer(b"".join(v for _, v in items), dtype=_np.float32).reshape(len(items), -1)
         q = _np.asarray(query, dtype=_np.float32)
-        if mat.shape[1] != q.shape[0]:
+        items = [(i, v) for i, v in items if blob_dim(v) == q.shape[0]]
+        if not items:
             return []
+        mat = decode_many([v for _, v in items])
         scores = mat @ q
         idx = _np.argsort(-scores)[:k]
         return [(items[i][0], float(scores[i])) for i in idx]
@@ -81,10 +121,10 @@ def store_top_k(store: Any, model: str, query: Vector, k: int, chunk: int = 2000
         fetched = rows.fetchmany(chunk)
         if not fetched:
             break
-        batch = [r for r in fetched if len(r[1]) == q.nbytes]   # vectors of another dimension cannot match
+        batch = [r for r in fetched if blob_dim(r[1]) == q.shape[0]]   # another dimension cannot match
         if not batch:
             continue
-        mat = _np.frombuffer(b"".join(r[1] for r in batch), dtype=_np.float32).reshape(len(batch), -1)
+        mat = decode_many([r[1] for r in batch])
         scores = mat @ q
         top = _np.argpartition(-scores, min(k, len(batch)) - 1)[:k] if len(batch) > k else range(len(batch))
         best = heapq.nlargest(k, best + [(float(scores[i]), batch[i][0]) for i in top])

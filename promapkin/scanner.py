@@ -102,28 +102,9 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
         old = store.file_index()
         contents: dict[str, tuple[str, str, int]] = {}
         for rel in files:
-            lang = language_of(rel)
-            if not lang:
-                continue
-            path = ws.root / rel
-            if lang in ASSET_LANGUAGES:
-                asset = _asset_fingerprint(path, lang)
-                if asset:
-                    contents[rel] = asset
-                continue
-            try:
-                if path.stat().st_size > MAX_FILE_BYTES:
-                    continue
-                data = path.read_bytes()
-            except OSError:
-                continue
-            if is_probably_binary(data):
-                continue
-            if lang in SNIFF:   # by content: .m (Objective-C/MATLAB), .v (Verilog/V), YAML/JSON infrastructure
-                lang = language_of(rel, data[:4000].decode("utf-8", "replace"))
-                if not lang:
-                    continue
-            contents[rel] = (gitutil.sha_of(data), lang, len(data))
+            fp = _fingerprint(ws, rel)
+            if fp:
+                contents[rel] = fp
         changed = [p for p, (sha, _, _) in contents.items() if full or old.get(p) != sha]
         deleted = [p for p in old if p not in contents]
         say(f"{len(contents)} files indexed, {len(changed)} changed, {len(deleted)} deleted")
@@ -222,7 +203,8 @@ def scan(ws: Workspace, *, full: bool = False, progress: Callable[[str], None] |
             stats.update(_optional("graph ML", warnings, graph_ml_pass, store, rt, ambiguous, revision,
                                    timer) or {})
             ambiguous.close()
-            _prune_dangling_edges(store)
+            # No dangling-edge pass here: enrichment only links existing nodes, and the nodes it removes
+            # (_gc_shared, via delete_nodes) take their edges with them.
             store.set_meta("ml", json.dumps(rt.describe()))
             store.conn.execute("DELETE FROM meta WHERE key='enrichment_pending'")
             timer.mark("finalize")
@@ -477,6 +459,30 @@ def _extract_chunk(arg: tuple[str, list[tuple[str, str, int]]]
                 errors.append(f"{rel}: data links skipped ({type(exc).__name__}: {str(exc)[:120]})")
         results.append((rel, is_generated(rel, text), facts, parser))
     return results, errors
+
+
+def _fingerprint(ws: Workspace, rel: str) -> tuple[str, str, int] | None:
+    """(sha, language, size) of a file the scanner indexes, or None for one it skips (no language, too large,
+    binary, or sniffed by content as not indexable)."""
+    lang = language_of(rel)
+    if not lang:
+        return None
+    path = ws.root / rel
+    if lang in ASSET_LANGUAGES:
+        return _asset_fingerprint(path, lang)
+    try:
+        if path.stat().st_size > MAX_FILE_BYTES:
+            return None
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if is_probably_binary(data):
+        return None
+    if lang in SNIFF:   # by content: .m (Objective-C/MATLAB), .v (Verilog/V), YAML/JSON infrastructure
+        lang = language_of(rel, data[:4000].decode("utf-8", "replace"))
+        if not lang:
+            return None
+    return gitutil.sha_of(data), lang, len(data)
 
 
 def _asset_fingerprint(path: Path, lang: str) -> tuple[str, str, int] | None:
@@ -1255,7 +1261,8 @@ def classify_pass(store: Store, rt: Any, revision: str, llm: Any = None, warm_on
         _update_attrs(store, m["id"], attrs)
         counts["layer"] += 1
 
-    store.delete_edges("json_extract(attrs, '$.classifier_task')='resource'")
+    # Resource edges always point at resource:* nodes; the dst range lets the index skip every other edge.
+    store.delete_edges("dst >= 'resource:' AND dst < 'resource;' AND json_extract(attrs, '$.classifier_task')='resource'")
     seen: set[tuple[str, str]] = set()
     evidence = ev.LLM_INFERENCE if llm else ev.ML_CLASSIFIER
     for ref in store.iter_refs(where="type = 'external_call'"):
@@ -1347,7 +1354,7 @@ PARALLEL_EMBED_MIN = 20_000
 def embed_pass(store: Store, rt: Any) -> int:
     """Embed nodes whose text changed. Streams the nodes; the built-in embedder (pure Python) runs in worker
     processes when there are many, since a kernel-sized index has about a million symbols."""
-    from promapkin.ml.embedders import pack
+    from promapkin.ml.embedders import COMPACT_MIN_VECTORS, pack
 
     total = 0
     kinds = ",".join(f"'{k}'" for k in EMBED_KINDS)
@@ -1371,13 +1378,15 @@ def embed_pass(store: Store, rt: Any) -> int:
             store.conn.executemany("INSERT OR REPLACE INTO embeddings(id, model, sha, vec) VALUES (?,?,?,?)",
                                    [(nid, emb.name, sha, blob) for (nid, sha, _), blob in zip(batch, blobs)])
 
-        missing = store.conn.execute(f"SELECT count(*) FROM nodes WHERE kind IN ({kinds})").fetchone()[0] - len(have)
+        total_nodes = store.conn.execute(f"SELECT count(*) FROM nodes WHERE kind IN ({kinds})").fetchone()[0]
+        missing = total_nodes - len(have)
         workers = _scan_workers_for() if not emb.neural and missing >= PARALLEL_EMBED_MIN else 1
+        half = total_nodes >= COMPACT_MIN_VECTORS     # float16 storage for large indexes
         if workers > 1:
-            total += _embed_parallel(emb, batches(), put, workers)
+            total += _embed_parallel(emb, batches(), put, workers, half)
         else:
             for batch in batches():
-                put(batch, [pack(v) for v in emb.embed([t for _, _, t in batch])])
+                put(batch, [pack(v, half) for v in emb.embed([t for _, _, t in batch])])
                 total += len(batch)
     store.prune_embeddings()
     return total
@@ -1389,7 +1398,8 @@ def _scan_workers_for() -> int:
     return want if want > 0 else min(8, os.cpu_count() or 1)
 
 
-def _embed_parallel(emb: Any, batches: Any, put: Callable[[list, list[bytes]], None], workers: int) -> int:
+def _embed_parallel(emb: Any, batches: Any, put: Callable[[list, list[bytes]], None], workers: int,
+                    half: bool = False) -> int:
     from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
     import multiprocessing
 
@@ -1400,7 +1410,7 @@ def _embed_parallel(emb: Any, batches: Any, put: Callable[[list, list[bytes]], N
     with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as pool:
         pending: dict[Any, list] = {}
         for batch in batches:
-            pending[pool.submit(_embed_batch, emb, [t for _, _, t in batch])] = batch
+            pending[pool.submit(_embed_batch, emb, [t for _, _, t in batch], half)] = batch
             if len(pending) >= workers * 3:
                 done, _ = wait(pending, return_when=FIRST_COMPLETED)
                 for fut in done:
@@ -1414,9 +1424,9 @@ def _embed_parallel(emb: Any, batches: Any, put: Callable[[list, list[bytes]], N
     return total
 
 
-def _embed_batch(emb: Any, texts: list[str]) -> list[bytes]:
+def _embed_batch(emb: Any, texts: list[str], half: bool = False) -> list[bytes]:
     from promapkin.ml.embedders import pack
-    return [pack(v) for v in emb.embed(texts)]
+    return [pack(v, half) for v in emb.embed(texts)]
 
 
 # ------------------------------------------------------------------------------------- freshness
@@ -1451,21 +1461,24 @@ def _gc_shared(store: Store) -> None:
 
 
 def stale_files(ws: Workspace) -> dict[str, list[str]]:
-    """Files whose content differs from the index (without rescanning)."""
+    """Files whose content differs from the index (without rescanning). Only files git reports as changed since
+    the indexed revision, untracked files and new paths are read: a status check on a kernel-sized repository
+    then costs a `git diff`, not hashing 2 GB."""
     old = ws.store.file_index()
+    suspects = gitutil.suspect_files(ws.root, ws.store.get_meta("indexed_revision") or "")
+    state = f"{ws.dir.relative_to(ws.root).as_posix()}/" if ws.dir.is_relative_to(ws.root) else "\0"
     modified, added = [], []
     current = set()
     for rel in _candidate_files(ws):
         if not language_of(rel):
             continue
         current.add(rel)
-        try:
-            data = (ws.root / rel).read_bytes()
-        except OSError:
-            continue
+        if rel in old and suspects is not None and rel not in suspects and not rel.startswith(state):
+            continue   # unchanged since the indexed revision
+        fp = _fingerprint(ws, rel)
         if rel not in old:
-            if len(data) <= MAX_FILE_BYTES and not is_probably_binary(data):
+            if fp:
                 added.append(rel)
-        elif old[rel] != gitutil.sha_of(data):
+        elif fp is None or fp[0] != old[rel]:
             modified.append(rel)
     return {"modified": modified, "added": added, "deleted": [p for p in old if p not in current]}

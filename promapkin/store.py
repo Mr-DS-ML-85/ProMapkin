@@ -199,6 +199,10 @@ class Store:
         self.busy_timeout = busy_timeout
         self.conn = sqlite3.connect(self.path, isolation_level=None, timeout=busy_timeout)
         self.conn.row_factory = sqlite3.Row
+        # New indexes use 8 KB pages: an embedding row (2 KB vector + key) fits once in a 4 KB page but three
+        # times in 8 KB, which keeps a kernel-sized index's vectors at a third of the disk. No effect on an
+        # existing database.
+        self.conn.execute("PRAGMA page_size=8192")
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(SCHEMA)

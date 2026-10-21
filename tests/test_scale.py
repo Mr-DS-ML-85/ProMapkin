@@ -45,6 +45,79 @@ class StreamingStoreTest(RepoTestCase):
         spool.close()
 
 
+class CompactVectorTest(unittest.TestCase):
+    def test_half_precision_blobs_round_trip_and_mix_with_float32(self):
+        from promapkin.ml import embedders as em
+        vec = em.normalize([0.3, -0.2, 0.9, 0.1])
+        full, half = em.pack(vec), em.pack(vec, half=True)
+        self.assertFalse(em.is_half(full))
+        if np is None:
+            self.assertEqual(full, half)      # without numpy, vectors are always stored as float32
+            return
+        self.assertTrue(em.is_half(half))
+        self.assertEqual((em.blob_dim(full), em.blob_dim(half)), (4, 4))
+        self.assertLess(max(abs(a - b) for a, b in zip(em.unpack(half), vec)), 1e-3)
+        np.testing.assert_allclose(em.decode_many([full, half]), [vec, vec], atol=1e-3)
+        scored = em.top_k(vec, [("a", full), ("b", half), ("c", em.pack([1.0, 0, 0]))], 3)
+        self.assertEqual([i for i, _ in scored][:2], ["a", "b"])
+
+    def test_new_index_uses_8k_pages(self):
+        import tempfile
+        from promapkin.store import Store
+        with tempfile.TemporaryDirectory() as d:
+            s = Store(f"{d}/index.db")
+            self.assertEqual(s.conn.execute("PRAGMA page_size").fetchone()[0], 8192)
+            s.close()
+
+
+class StaleFilesTest(RepoTestCase):
+    def test_status_freshness_matches_what_a_scan_would_change(self):
+        from promapkin.scanner import scan, stale_files
+        # A YAML file that is not infrastructure is skipped by the scanner, so it must not look "added" forever
+        # (Linux has ~6,900 devicetree bindings like this).
+        (self.root / "notes.yaml").write_text("title: just some notes\nitems: [1, 2]\n")
+        (self.root / "scratch.py").write_text("def draft():\n    return 1\n")      # untracked, indexed
+        git(self.root, "add", "notes.yaml")
+        git(self.root, "commit", "-qm", "notes")
+        scan(self.ws)
+        self.assertEqual(stale_files(self.ws), {"modified": [], "added": [], "deleted": []})
+
+        (self.root / "scratch.py").write_text("def draft():\n    return 2\n")      # edit an untracked file
+        target = self.root / "searchapp" / "api" / "routes.py"
+        target.write_text(target.read_text() + "\n# edited\n")                       # uncommitted edit
+        (self.root / "searchapp" / "brand_new.py").write_text("X = 1\n")             # new file
+        (self.root / "README.md").unlink()                                              # deletion
+        st = stale_files(self.ws)
+        self.assertEqual(sorted(st["modified"]), ["scratch.py", "searchapp/api/routes.py"])
+        self.assertEqual(st["added"], ["searchapp/brand_new.py"])
+        self.assertEqual(st["deleted"], ["README.md"])
+
+        scan(self.ws)
+        self.assertEqual(stale_files(self.ws), {"modified": [], "added": [], "deleted": []})
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-qm", "more")
+        lib = self.root / "searchapp" / "brand_new.py"
+        lib.write_text("X = 2\n")
+        git(self.root, "commit", "-qam", "change after indexing")                     # committed after the scan
+        self.assertEqual(stale_files(self.ws)["modified"], ["searchapp/brand_new.py"])
+
+
+class OverviewCacheTest(RepoTestCase):
+    def test_overview_is_computed_once_per_indexed_revision(self):
+        from promapkin import blueprint
+        from promapkin.agents import orchestrator
+        from promapkin.scanner import scan
+        with mock.patch.object(orchestrator, "run", wraps=orchestrator.run) as run:
+            first = blueprint.overview(self.ws)
+            second = blueprint.overview(self.ws)
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(first, second)
+            (self.root / "searchapp" / "later.py").write_text("def later():\n    return 1\n")
+            scan(self.ws)                                   # a scan clears ctx:* entries
+            blueprint.overview(self.ws)
+            self.assertEqual(run.call_count, 2)
+
+
 class ResolverRegressionTest(RepoTestCase):
     def test_call_through_a_submodule_name_does_not_crash(self):
         # Regression (Linux scripts/sbom): `sub.missing()` inside package `pkg`, where `pkg.sub` is a module, made
@@ -137,6 +210,29 @@ class LargeRepoGraphMLTest(RepoTestCase):
         worst = max(float(np.abs(np.frombuffer(full[k], np.float32) - np.frombuffer(half[k], np.float32)).max())
                     for k in full)
         self.assertLess(worst, 2e-3)
+
+    def test_compact_storage_for_large_indexes(self):
+        from promapkin import ml, scanner
+        from promapkin.ml import embedders as em
+        s = self.ws.store
+        rt = ml.runtime(self.ws)
+        gm = graph_ml.graph_model_name(rt.embedder.name)
+        with s.transaction():
+            scanner.embed_pass(s, rt)
+            graph_ml.propagate(s, rt.embedder.name)
+            exact = graph_ml.similarity_edges(s, gm, threshold=0.5)
+        with s.transaction(), mock.patch.object(em, "COMPACT_MIN_VECTORS", 1), \
+                mock.patch.object(graph_ml, "COMPACT_MIN_VECTORS", 1):
+            s.conn.execute("DELETE FROM embeddings")
+            scanner.embed_pass(s, rt)
+            graph_ml.propagate(s, rt.embedder.name)
+            compact = graph_ml.similarity_edges(s, gm, threshold=0.5)
+        blobs = [v for _, v in s.embeddings(rt.embedder.name)] + [v for _, v in s.embeddings(gm)]
+        self.assertTrue(blobs and all(em.is_half(b) for b in blobs))
+        self.assertAlmostEqual(compact, exact, delta=max(2, exact // 20))
+        from promapkin.service import Service
+        hits = Service(self.ws).similar("SearchService.search")["results"]
+        self.assertTrue(hits)
 
     def test_lsh_similarity_mode_produces_ml_edges(self):
         base = self.embedded()

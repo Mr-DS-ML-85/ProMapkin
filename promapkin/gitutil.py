@@ -64,6 +64,19 @@ def list_files(root: Path) -> list[str]:
     return sorted(found)
 
 
+def suspect_files(root: Path, revision: str) -> set[str] | None:
+    """Files whose content may differ from `revision`: tracked files changed since it (staged or not) and untracked
+    files, relative to root. None when git cannot tell (not a repository, unknown revision)."""
+    rev = revision.split("+")[0]
+    if not rev or rev == "worktree":
+        return None
+    diff = _git(root, "diff", "--name-only", "--relative", "-z", rev, "--")
+    untracked = _git(root, "ls-files", "-o", "--exclude-standard", "-z")
+    if diff is None or untracked is None:
+        return None
+    return {f for f in diff.split("\0") if f} | {f for f in untracked.split("\0") if f}
+
+
 def recent_commits(root: Path, limit: int = 20) -> list[dict[str, str]]:
     out = _git(root, "log", f"-{limit}", "--pretty=format:%H%x1f%an%x1f%ad%x1f%s", "--date=short")
     if not out:
